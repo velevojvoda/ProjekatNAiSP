@@ -12,7 +12,7 @@ import (
 
 func main() {
 	reader := bufio.NewReader(os.Stdin)
-	cfg, err := config.LoadConfig()
+	cfg, err := config.LoadConfig("config.json")
 	if err != nil {
 		fmt.Println("Error conf:", err)
 		return
@@ -37,16 +37,20 @@ func main() {
 
 		parts := strings.SplitN(line, " ", 3)
 
-		if len(parts) < 3 {
-			fmt.Println("Format: (PUT/DELETE/KEY) <key> <value>")
+		if len(parts) != 3 && len(parts) != 2 {
+			fmt.Println("Format: PUT <key> <value> or GET <key> or DELETE <key>")
 			continue
 		}
 		cmd := strings.ToUpper(parts[0])
 		key := parts[1]
-		value := parts[2]
 
 		switch cmd {
 		case "PUT":
+			if len(parts) != 3 {
+				fmt.Println("Format: PUT <key> <value>")
+				continue
+			}
+			value := parts[2]
 			if err := eng.Put(key, []byte(value)); err != nil {
 				fmt.Println(err)
 			} else {
