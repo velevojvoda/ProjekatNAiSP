@@ -13,6 +13,7 @@ app/
 data/
   wal.log
 main.go
+config.json
 ```
 
 ## Opis
