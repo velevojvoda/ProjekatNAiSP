@@ -16,12 +16,32 @@ func NewEngine(cfg *config.Config) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	e := &Engine{
 		cfg:  cfg,
 		data: make(map[string][]byte),
 		wal:  w,
 	}
+
 	return e, nil
+}
+
+func (e *Engine) Recover() error {
+	records, err := e.wal.ReadAllRecords()
+	if err != nil {
+		return err
+	}
+
+	for _, rec := range records {
+		switch rec.Op {
+		case wal.OpPut:
+			e.data[rec.Key] = rec.Value
+		case wal.OpDelete:
+			delete(e.data, rec.Key)
+		}
+	}
+
+	return nil
 }
 
 func (e *Engine) Put(key string, value []byte) error {
@@ -49,5 +69,5 @@ func (e *Engine) Delete(key string) error {
 }
 
 func (e *Engine) Shutdown() {
-	e.wal.Close()
+	_ = e.wal.Close()
 }
