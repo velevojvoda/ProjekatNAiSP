@@ -5,5 +5,6 @@
   "block_size_kb": 4,
   "cache_capacity": 1000,
   "memtable_impl": "hashmap",
-  "max_lsm_levels": 3
+  "max_lsm_levels": 3,
+  "wal_segment_max_records": 3 
 }
