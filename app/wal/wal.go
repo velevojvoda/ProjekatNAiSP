@@ -8,11 +8,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 )
 
 const (
-	OpPut    = 1
-	OpDelete = 2
+	OpPut    byte = 1
+	OpDelete byte = 2
 )
 
 type Record struct {
@@ -22,60 +24,121 @@ type Record struct {
 }
 
 type WAL struct {
-	file *os.File
-	path string
+	dir              string
+	currentFile      *os.File
+	currentPath      string
+	currentSegment   int
+	recordsInSegment int
+	maxRecordsPerSeg int
 }
 
-func NewWAL(dir string) (*WAL, error) {
-	path := filepath.Join(dir, "wal.log")
+func NewWAL(dir string, maxRecordsPerSeg int) (*WAL, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open WAL file: %w", err)
+
+	if maxRecordsPerSeg <= 0 {
+		maxRecordsPerSeg = 100
 	}
 
-	return &WAL{
-		file: f,
-		path: path}, nil
+	w := &WAL{
+		dir:              dir,
+		maxRecordsPerSeg: maxRecordsPerSeg,
+	}
+
+	if err := w.initializeLastSegment(); err != nil {
+		return nil, err
+	}
+
+	return w, nil
+}
+
+func (w *WAL) initializeLastSegment() error {
+	segments, err := w.listSegments()
+	if err != nil {
+		return err
+	}
+
+	// Ako nema nijednog segmenta, kreiraj prvi
+	if len(segments) == 0 {
+		w.currentSegment = 1
+		w.currentPath = w.segmentPath(w.currentSegment)
+
+		f, err := os.OpenFile(w.currentPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			return fmt.Errorf("can't create first WAL segment: %w", err)
+		}
+
+		w.currentFile = f
+		w.recordsInSegment = 0
+		return nil
+	}
+
+	// Inače uzmi poslednji segment
+	lastPath := segments[len(segments)-1]
+	lastSegmentNumber, err := extractSegmentNumber(lastPath)
+	if err != nil {
+		return err
+	}
+
+	recordCount, err := countRecordsInFile(lastPath)
+	if err != nil {
+		return err
+	}
+
+	// Ako je poslednji segment pun, napravi novi
+	if recordCount >= w.maxRecordsPerSeg {
+		w.currentSegment = lastSegmentNumber + 1
+		w.currentPath = w.segmentPath(w.currentSegment)
+
+		f, err := os.OpenFile(w.currentPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			return fmt.Errorf("can't create next WAL segment: %w", err)
+		}
+
+		w.currentFile = f
+		w.recordsInSegment = 0
+		return nil
+	}
+
+	// Ako nije pun, nastavi da pišeš u njega
+	f, err := os.OpenFile(lastPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("can't open existing WAL segment: %w", err)
+	}
+
+	w.currentFile = f
+	w.currentPath = lastPath
+	w.currentSegment = lastSegmentNumber
+	w.recordsInSegment = recordCount
+
+	return nil
 }
 
 func (w *WAL) AppendPut(key string, value []byte) error {
 	var payload bytes.Buffer
 
-	//op
 	if err := payload.WriteByte(OpPut); err != nil {
 		return err
 	}
 
-	//key length
 	if err := binary.Write(&payload, binary.LittleEndian, uint32(len(key))); err != nil {
 		return err
 	}
 
-	//value length
 	if err := binary.Write(&payload, binary.LittleEndian, uint32(len(value))); err != nil {
 		return err
 	}
 
-	//key
 	if _, err := payload.Write([]byte(key)); err != nil {
 		return err
 	}
 
-	//value
 	if _, err := payload.Write(value); err != nil {
 		return err
 	}
 
-	crc := crc32.ChecksumIEEE(payload.Bytes())
-
-	if err := binary.Write(w.file, binary.LittleEndian, crc); err != nil {
-		return err
-	}
-
-	if _, err := w.file.Write(payload.Bytes()); err != nil {
+	if err := w.appendPayload(payload.Bytes()); err != nil {
 		return err
 	}
 
@@ -84,55 +147,106 @@ func (w *WAL) AppendPut(key string, value []byte) error {
 
 func (w *WAL) AppendDelete(key string) error {
 	var payload bytes.Buffer
+
 	if err := payload.WriteByte(OpDelete); err != nil {
 		return err
 	}
+
 	if err := binary.Write(&payload, binary.LittleEndian, uint32(len(key))); err != nil {
 		return err
 	}
+
 	if _, err := payload.Write([]byte(key)); err != nil {
 		return err
 	}
 
-	crc := crc32.ChecksumIEEE(payload.Bytes())
-
-	if err := binary.Write(w.file, binary.LittleEndian, crc); err != nil {
-		return err
-	}
-
-	if _, err := w.file.Write(payload.Bytes()); err != nil {
+	if err := w.appendPayload(payload.Bytes()); err != nil {
 		return err
 	}
 
 	return nil
 }
 
+func (w *WAL) appendPayload(payload []byte) error {
+	// Ako je segment pun, rotiraj
+	if w.recordsInSegment >= w.maxRecordsPerSeg {
+		if err := w.rotateSegment(); err != nil {
+			return err
+		}
+	}
+
+	crc := crc32.ChecksumIEEE(payload)
+
+	if err := binary.Write(w.currentFile, binary.LittleEndian, crc); err != nil {
+		return err
+	}
+
+	if _, err := w.currentFile.Write(payload); err != nil {
+		return err
+	}
+
+	w.recordsInSegment++
+	return nil
+}
+
+func (w *WAL) rotateSegment() error {
+	if w.currentFile != nil {
+		if err := w.currentFile.Close(); err != nil {
+			return err
+		}
+	}
+
+	w.currentSegment++
+	w.currentPath = w.segmentPath(w.currentSegment)
+
+	f, err := os.OpenFile(w.currentPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+
+	w.currentFile = f
+	w.recordsInSegment = 0
+	return nil
+}
+
 func (w *WAL) Close() error {
-	return w.file.Close()
+	if w.currentFile == nil {
+		return nil
+	}
+	return w.currentFile.Close()
 }
 
 func (w *WAL) ReadAllRecords() ([]Record, error) {
-	f, err := os.Open(w.path)
+	segments, err := w.listSegments()
 	if err != nil {
-		return nil, fmt.Errorf("can't open WAL for reading: %w", err)
+		return nil, err
 	}
-	defer f.Close()
 
-	var records []Record
+	var all []Record
 
-	for {
-		record, err := ReadNextRecord(f)
-		if err == io.EOF {
-			break
-		}
+	for _, segPath := range segments {
+		f, err := os.Open(segPath)
 		if err != nil {
 			return nil, err
 		}
 
-		records = append(records, record)
+		for {
+			rec, err := ReadNextRecord(f)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				_ = f.Close()
+				return nil, fmt.Errorf("error while reading segment %s: %w", segPath, err)
+			}
+
+			all = append(all, rec)
+		}
+
+		_ = f.Close()
 	}
 
-	return records, nil
+	return all, nil
 }
 
 func ReadNextRecord(r io.Reader) (Record, error) {
@@ -173,6 +287,7 @@ func ReadNextRecord(r io.Reader) (Record, error) {
 		if _, err := io.ReadFull(r, keyBytes); err != nil {
 			return Record{}, err
 		}
+
 		valueBytes := make([]byte, valueLen)
 		if _, err := io.ReadFull(r, valueBytes); err != nil {
 			return Record{}, err
@@ -223,4 +338,67 @@ func ReadNextRecord(r io.Reader) (Record, error) {
 	default:
 		return Record{}, fmt.Errorf("unknown operation type: %d", op)
 	}
+}
+
+func (w *WAL) listSegments() ([]string, error) {
+	entries, err := os.ReadDir(w.dir)
+	if err != nil {
+		return nil, err
+	}
+
+	var segments []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+		if strings.HasPrefix(name, "wal_") && strings.HasSuffix(name, ".log") {
+			segments = append(segments, filepath.Join(w.dir, name))
+		}
+	}
+
+	sort.Slice(segments, func(i, j int) bool {
+		return segments[i] < segments[j]
+	})
+
+	return segments, nil
+}
+
+func (w *WAL) segmentPath(segment int) string {
+	return filepath.Join(w.dir, fmt.Sprintf("wal_%04d.log", segment))
+}
+
+func extractSegmentNumber(path string) (int, error) {
+	base := filepath.Base(path)
+
+	var num int
+	_, err := fmt.Sscanf(base, "wal_%04d.log", &num)
+	if err != nil {
+		return 0, fmt.Errorf("invalid WAL segment name: %s", base)
+	}
+
+	return num, nil
+}
+
+func countRecordsInFile(path string) (int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	count := 0
+	for {
+		_, err := ReadNextRecord(f)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return 0, err
+		}
+		count++
+	}
+
+	return count, nil
 }

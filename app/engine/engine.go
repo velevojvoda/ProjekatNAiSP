@@ -12,7 +12,7 @@ type Engine struct {
 }
 
 func NewEngine(cfg *config.Config) (*Engine, error) {
-	w, err := wal.NewWAL(cfg.WALDir)
+	w, err := wal.NewWAL(cfg.WALDir, cfg.WALSegmentMaxRecords)
 	if err != nil {
 		return nil, err
 	}
