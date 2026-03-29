@@ -8,14 +8,14 @@ import (
 )
 
 type Config struct {
-	DataDir              string `json:"data_dir"`
-	WALDir               string `json:"wal_dir"`
-	MemtableMaxEntries   int    `json:"memtable_max_entries"`
-	BlockSizeKB          int    `json:"block_size_kb"`
-	CacheCapacity        int    `json:"cache_capacity"`
-	MemtableImpl         string `json:"memtable_impl"`
-	MaxLSMLevels         int    `json:"max_lsm_levels"`
-	WALSegmentMaxRecords int    `json:"wal_segment_max_records"`
+	DataDir            string `json:"data_dir"`
+	WALDir             string `json:"wal_dir"`
+	MemtableMaxEntries int    `json:"memtable_max_entries"`
+	BlockSizeKB        int    `json:"block_size_kb"`
+	CacheCapacity      int    `json:"cache_capacity"`
+	MemtableImpl       string `json:"memtable_impl"`
+	MaxLSMLevels       int    `json:"max_lsm_levels"`
+	WALSegmentBlocks   int    `json:"wal_segment_max_records"`
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -57,8 +57,8 @@ func applyDefaults(cfg *Config) {
 	if cfg.MaxLSMLevels <= 0 {
 		cfg.MaxLSMLevels = 3
 	}
-	if cfg.WALSegmentMaxRecords <= 0 {
-		cfg.WALSegmentMaxRecords = 100
+	if cfg.WALSegmentBlocks <= 0 {
+		cfg.WALSegmentBlocks = 4
 	}
 }
 
