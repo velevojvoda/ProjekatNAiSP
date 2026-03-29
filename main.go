@@ -63,7 +63,7 @@ func main() {
 			} else if value == nil {
 				fmt.Println("No key")
 			} else {
-				fmt.Println(value)
+				fmt.Println(string((value)))
 			}
 
 		case "DELETE":
