@@ -12,6 +12,7 @@ import (
 
 func main() {
 	cfg, err := config.LoadConfig("config.json")
+
 	if err != nil {
 		fmt.Println("Error conf:", err)
 		return
