@@ -17,7 +17,6 @@ const (
 	OpDelete byte = 2
 )
 
-// fragment types, in case a logical record is split across multiple blocks
 const (
 	FragFull   byte = 1
 	FragFirst  byte = 2
@@ -25,10 +24,9 @@ const (
 	FragLast   byte = 4
 )
 
-// [recordCRC][fragType][payloadLen][payload]
-const fragmentHeaderSize = 7 // 4 bytes CRC + 1 byte frag type + 2 bytes payload length
+// [recordCRC(4)][fragType(1)][payloadLen(4)][payload]
+const fragmentHeaderSize = 9
 
-// record format:
 // [Op][keyLen][valueLen][keyBytes][valueBytes] for put
 // [Op][keyLen][keyBytes] for delete
 type Record struct {
@@ -37,8 +35,6 @@ type Record struct {
 	Value []byte
 }
 
-// fragment format:
-// [recordCRC][fragType][payloadLen][payload]
 type fragment struct {
 	recordCRC uint32
 	fragType  byte
@@ -54,7 +50,7 @@ type WAL struct {
 	currentFile    *os.File
 	currentPath    string
 	currentSegment int
-	currentOffset  int64 // offset within current segment
+	currentOffset  int64
 }
 
 func NewWAL(dir string, blockSize int, blocksPerSegment int) (*WAL, error) {
@@ -63,11 +59,11 @@ func NewWAL(dir string, blockSize int, blocksPerSegment int) (*WAL, error) {
 	}
 
 	if blockSize <= 0 {
-		return nil, fmt.Errorf("Invalid WAL block size")
+		return nil, fmt.Errorf("invalid WAL block size")
 	}
 
 	if blocksPerSegment <= 0 {
-		return nil, fmt.Errorf("Invalid WAL blocks per segment")
+		return nil, fmt.Errorf("invalid WAL blocks per segment")
 	}
 
 	w := &WAL{
@@ -79,21 +75,21 @@ func NewWAL(dir string, blockSize int, blocksPerSegment int) (*WAL, error) {
 
 	if err := w.initializeLastSegment(); err != nil {
 		return nil, err
-	} // if there are existing segments, we will append to the last one; otherwise we create a new one
+	}
 
 	return w, nil
 }
 
 func (w *WAL) AppendPut(key string, value []byte) error {
-	recordBytes, err := buildPutRecord(key, value) // build the logical record in memory
+	recordBytes, err := buildPutRecord(key, value)
 	if err != nil {
 		return err
 	}
-	return w.appendLogicalRecord(recordBytes) // append the logical record to WAL, splitting into fragments if needed
+	return w.appendLogicalRecord(recordBytes)
 }
 
 func (w *WAL) AppendDelete(key string) error {
-	recordBytes, err := buildDeleteRecord(key) //same logic as AppendPut, but for delete operation
+	recordBytes, err := buildDeleteRecord(key)
 	if err != nil {
 		return err
 	}
@@ -107,34 +103,34 @@ func (w *WAL) Close() error {
 	return nil
 }
 
-// for recovery
 func (w *WAL) ReadAllRecords() ([]Record, error) {
-	segments, err := w.listSegments() //wal_0001.log, wal_0002.log, ...
+	segments, err := w.listSegments()
 	if err != nil {
 		return nil, err
 	}
 
 	var records []Record
-	var assembling []byte     // all collected fragments of the currently assembling logical record
-	var assemblingCRC uint32  // CRC of that record
-	var asseblingStrated bool // if we are in the middle of assembling a fragmented record
+	var assembling []byte
+	var assemblingCRC uint32
+	var assemblingStarted bool
 
 	for _, segPath := range segments {
 		f, err := os.Open(segPath)
 		if err != nil {
 			return nil, err
 		}
-		stat, err := f.Stat() // get file size for boundary checks
+
+		stat, err := f.Stat()
 		if err != nil {
 			_ = f.Close()
 			return nil, err
 		}
 
-		var offset int64 = 0
-		filesize := stat.Size()
+		var offset int64
+		fileSize := stat.Size()
 
 		for {
-			frag, err := readNextFragment(f, &offset, filesize, w.blockSize) //read next fragment one by one
+			frag, err := readNextFragment(f, &offset, fileSize, w.blockSize)
 			if err == io.EOF {
 				break
 			}
@@ -143,33 +139,35 @@ func (w *WAL) ReadAllRecords() ([]Record, error) {
 				return nil, fmt.Errorf("reading segment %s: %w", segPath, err)
 			}
 
-			switch frag.fragType { // handle fragment based on its type
-			case FragFull: // if it's a full fragment, we can parse it directly into a logical record
+			switch frag.fragType {
+			case FragFull:
 				rec, err := parseLogicalRecord(frag.payload, frag.recordCRC)
 				if err != nil {
 					_ = f.Close()
 					return nil, err
 				}
 				records = append(records, rec)
-			case FragFirst: // if it's the first fragment of a multi-fragment record, we start assembling
+
+			case FragFirst:
 				assembling = append([]byte{}, frag.payload...)
 				assemblingCRC = frag.recordCRC
-				asseblingStrated = true
+				assemblingStarted = true
 
-			case FragMiddle: // if it's a middle fragment, we check that it belongs to the same logical record and append its payload
-				if !asseblingStrated {
+			case FragMiddle:
+				if !assemblingStarted {
 					_ = f.Close()
-					return nil, fmt.Errorf("Middle fragment without first")
+					return nil, fmt.Errorf("middle fragment without first")
 				}
 				if frag.recordCRC != assemblingCRC {
 					_ = f.Close()
 					return nil, fmt.Errorf("fragment CRC mismatch")
 				}
 				assembling = append(assembling, frag.payload...)
-			case FragLast: // if it's the last fragment, we check that it belongs to the same logical record, append its payload, and then parse the full logical record
-				if !asseblingStrated {
+
+			case FragLast:
+				if !assemblingStarted {
 					_ = f.Close()
-					return nil, fmt.Errorf("Last fragment without first")
+					return nil, fmt.Errorf("last fragment without first")
 				}
 				if frag.recordCRC != assemblingCRC {
 					_ = f.Close()
@@ -186,22 +184,25 @@ func (w *WAL) ReadAllRecords() ([]Record, error) {
 
 				assembling = nil
 				assemblingCRC = 0
-				asseblingStrated = false
+				assemblingStarted = false
+
 			default:
 				_ = f.Close()
 				return nil, fmt.Errorf("unknown fragment type")
 			}
 		}
+
 		_ = f.Close()
 	}
 
-	if asseblingStrated { // if we finished reading all segments but assebling is still happening
+	if assemblingStarted {
 		return nil, fmt.Errorf("incomplete fragmented record at the end of WAL")
 	}
+
 	return records, nil
 }
 
-func buildPutRecord(key string, value []byte) ([]byte, error) { // build the logical record for a put operation in memory
+func buildPutRecord(key string, value []byte) ([]byte, error) {
 	var buf bytes.Buffer
 
 	if err := buf.WriteByte(OpPut); err != nil {
@@ -223,7 +224,7 @@ func buildPutRecord(key string, value []byte) ([]byte, error) { // build the log
 	return buf.Bytes(), nil
 }
 
-func buildDeleteRecord(key string) ([]byte, error) { // same logic as buildPutRecord
+func buildDeleteRecord(key string) ([]byte, error) {
 	var buf bytes.Buffer
 
 	if err := buf.WriteByte(OpDelete); err != nil {
@@ -239,10 +240,14 @@ func buildDeleteRecord(key string) ([]byte, error) { // same logic as buildPutRe
 	return buf.Bytes(), nil
 }
 
-func parseLogicalRecord(recordBytes []byte, expectedCRC uint32) (Record, error) { // parse the logical record from the assembled bytes, checking CRC and format
+func parseLogicalRecord(recordBytes []byte, expectedCRC uint32) (Record, error) {
 	calculated := crc32.ChecksumIEEE(recordBytes)
 	if calculated != expectedCRC {
-		return Record{}, fmt.Errorf("logical record CRC mismatch: stored=%d calculated=%d", expectedCRC, calculated)
+		return Record{}, fmt.Errorf(
+			"logical record CRC mismatch: stored=%d calculated=%d",
+			expectedCRC,
+			calculated,
+		)
 	}
 
 	r := bytes.NewReader(recordBytes)
@@ -279,52 +284,54 @@ func parseLogicalRecord(recordBytes []byte, expectedCRC uint32) (Record, error) 
 			Key:   string(keyBytes),
 			Value: valueBytes,
 		}, nil
+
 	case OpDelete:
 		var keyLen uint32
 
 		if err := binary.Read(r, binary.LittleEndian, &keyLen); err != nil {
-			return Record{}, nil
+			return Record{}, err
 		}
 
 		keyBytes := make([]byte, keyLen)
 		if _, err := io.ReadFull(r, keyBytes); err != nil {
-			return Record{}, nil
+			return Record{}, err
 		}
 
 		return Record{
 			Op:  OpDelete,
 			Key: string(keyBytes),
 		}, nil
+
 	default:
-		return Record{}, fmt.Errorf("unkown operation type")
+		return Record{}, fmt.Errorf("unknown operation type")
 	}
 }
 
-func (w *WAL) appendLogicalRecord(recordBytes []byte) error { // append the logical record to WAL, splitting into fragments if needed
+func (w *WAL) appendLogicalRecord(recordBytes []byte) error {
 	recordCRC := crc32.ChecksumIEEE(recordBytes)
 	remaining := recordBytes
 	first := true
 
-	for len(remaining) > 0 { // goes fragment by fragment
-		if w.currentOffset == int64(w.segmentSize) { // open new segment if current one is full
+	for len(remaining) > 0 {
+		if w.currentOffset == int64(w.segmentSize) {
 			if err := w.rotateSegment(); err != nil {
 				return err
 			}
 		}
 
-		blockOffset := int(w.currentOffset % int64(w.blockSize)) // current offset within the block
+		blockOffset := int(w.currentOffset % int64(w.blockSize))
 		remainingInBlock := w.blockSize - blockOffset
 
-		if remainingInBlock < fragmentHeaderSize+1 { // if there is not enough space for at least 1 byte of payload and header, we pad the rest of the block with zeros and move to the next block
+		if remainingInBlock < fragmentHeaderSize+1 {
 			if err := w.padToEndOfBlock(remainingInBlock); err != nil {
 				return err
 			}
 			continue
 		}
 
-		maxPayloadInThisBlock := remainingInBlock - fragmentHeaderSize // maximum payload we can write in this block after accounting for header
-		chunkSize := min(len(remaining), maxPayloadInThisBlock)        // how much of the remaining logical record we will put in this fragment
-		chunk := remaining[:chunkSize]                                 // the actual payload for this fragment
+		maxPayloadInThisBlock := remainingInBlock - fragmentHeaderSize
+		chunkSize := min(len(remaining), maxPayloadInThisBlock)
+		chunk := remaining[:chunkSize]
 
 		var fragType byte
 		last := chunkSize == len(remaining)
@@ -344,22 +351,22 @@ func (w *WAL) appendLogicalRecord(recordBytes []byte) error { // append the logi
 			return err
 		}
 
-		remaining = remaining[chunkSize:] // update the remaining part of the logical record that we still need to write
+		remaining = remaining[chunkSize:]
 		first = false
 	}
 
 	return nil
 }
 
-func (w *WAL) writeFragment(recordCRC uint32, fragType byte, payload []byte) error { // write a single fragment to the current WAL segment at the current offset
+func (w *WAL) writeFragment(recordCRC uint32, fragType byte, payload []byte) error {
 	if err := binary.Write(w.currentFile, binary.LittleEndian, recordCRC); err != nil {
-		return nil
+		return err
 	}
 	if _, err := w.currentFile.Write([]byte{fragType}); err != nil {
-		return nil
+		return err
 	}
 	if err := binary.Write(w.currentFile, binary.LittleEndian, uint32(len(payload))); err != nil {
-		return nil
+		return err
 	}
 	if _, err := w.currentFile.Write(payload); err != nil {
 		return err
@@ -369,21 +376,26 @@ func (w *WAL) writeFragment(recordCRC uint32, fragType byte, payload []byte) err
 	return nil
 }
 
-func (w *WAL) padToEndOfBlock(n int) error { // write n zero bytes to pad the rest of the block
+func (w *WAL) padToEndOfBlock(n int) error {
 	if n <= 0 {
 		return nil
 	}
+
 	padding := make([]byte, n)
 	if _, err := w.currentFile.Write(padding); err != nil {
 		return err
 	}
-	if w.currentOffset == int64(w.segmentSize) { // if after padding we are at the end of the segment, rotate to a new segment
+
+	w.currentOffset += int64(n)
+
+	if w.currentOffset == int64(w.segmentSize) {
 		return w.rotateSegment()
 	}
+
 	return nil
 }
 
-func (w *WAL) rotateSegment() error { // close current segment and open a new one with incremented segment number
+func (w *WAL) rotateSegment() error {
 	if w.currentFile != nil {
 		if err := w.currentFile.Close(); err != nil {
 			return err
@@ -403,14 +415,15 @@ func (w *WAL) rotateSegment() error { // close current segment and open a new on
 	return nil
 }
 
-func (w *WAL) initializeLastSegment() error { // when we create the WAL, we check if there are already existing segments
+func (w *WAL) initializeLastSegment() error {
 	segments, err := w.listSegments()
 	if err != nil {
-		return nil
+		return err
 	}
+
 	if len(segments) == 0 {
 		w.currentSegment = 1
-		w.currentPath = w.segmentPath(w.currentSegment) // if there are no existing segments, we start with segment 1
+		w.currentPath = w.segmentPath(w.currentSegment)
 
 		f, err := os.OpenFile(w.currentPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 		if err != nil {
@@ -423,20 +436,22 @@ func (w *WAL) initializeLastSegment() error { // when we create the WAL, we chec
 	}
 
 	lastPath := segments[len(segments)-1]
-	lastSegmentNumber, err := extractSegmentNumber(lastPath) // if there are existing segments, we will append to the last one; otherwise we create a new one
+	lastSegmentNumber, err := extractSegmentNumber(lastPath)
 	if err != nil {
 		return err
 	}
+
 	stat, err := os.Stat(lastPath)
 	if err != nil {
-		return nil
-	}
-	size := stat.Size()
-	if size > int64(w.segmentSize) { // if the last segment is larger than the configured segment size, or corrupted
-		return fmt.Errorf("segment %s esexceeds configured segment size", lastPath)
+		return err
 	}
 
-	if size == int64(w.segmentSize) { // if the last segment is exactly full, we start a new segment
+	size := stat.Size()
+	if size > int64(w.segmentSize) {
+		return fmt.Errorf("segment %s exceeds configured segment size", lastPath)
+	}
+
+	if size == int64(w.segmentSize) {
 		w.currentSegment = lastSegmentNumber + 1
 		w.currentPath = w.segmentPath(w.currentSegment)
 
@@ -465,12 +480,12 @@ func (w *WAL) initializeLastSegment() error { // when we create the WAL, we chec
 
 func readNextFragment(f *os.File, offset *int64, fileSize int64, blockSize int) (fragment, error) {
 	for {
-		if *offset >= fileSize { // if we reached the end of the file, return EOF
+		if *offset >= fileSize {
 			return fragment{}, io.EOF
 		}
 
-		blockOffset := int(*offset % int64(blockSize)) // current offset within the block
-		remainingInBlock := blockSize - blockOffset    // how many bytes are remaining in the current block
+		blockOffset := int(*offset % int64(blockSize))
+		remainingInBlock := blockSize - blockOffset
 
 		if remainingInBlock < fragmentHeaderSize+1 {
 			skip := int64(remainingInBlock)
@@ -481,41 +496,41 @@ func readNextFragment(f *os.File, offset *int64, fileSize int64, blockSize int) 
 			continue
 		}
 
-		if *offset+int64(fragmentHeaderSize) > fileSize { // if there is not enough bytes left in the file for even the fragment header, EOF
+		if *offset+int64(fragmentHeaderSize) > fileSize {
 			return fragment{}, io.EOF
 		}
 
 		var recordCRC uint32
-		if err := binary.Read(f, binary.LittleEndian, &recordCRC); err != nil { // read the fragment header
+		if err := binary.Read(f, binary.LittleEndian, &recordCRC); err != nil {
 			return fragment{}, err
 		}
 
 		fragTypeBuf := make([]byte, 1)
-		if _, err := io.ReadFull(f, fragTypeBuf); err != nil { // read the fragment type
+		if _, err := io.ReadFull(f, fragTypeBuf); err != nil {
 			return fragment{}, err
 		}
 		fragType := fragTypeBuf[0]
 
 		var payloadLen uint32
-		if err := binary.Read(f, binary.LittleEndian, &payloadLen); err != nil { // read the payload length
+		if err := binary.Read(f, binary.LittleEndian, &payloadLen); err != nil {
 			return fragment{}, err
 		}
 
 		maxPayloadInThisBlock := remainingInBlock - fragmentHeaderSize
-		if int(payloadLen) > maxPayloadInThisBlock { // if the payload length exceeds the remaining space in the block, it means the fragment is corrupted
+		if int(payloadLen) > maxPayloadInThisBlock {
 			return fragment{}, fmt.Errorf("fragment payload exceeds block boundary")
 		}
 
-		if *offset+int64(fragmentHeaderSize)+int64(payloadLen) > fileSize { // if there is not enough bytes left in the file for the whole fragment, EOF
+		if *offset+int64(fragmentHeaderSize)+int64(payloadLen) > fileSize {
 			return fragment{}, io.EOF
 		}
 
 		payload := make([]byte, payloadLen)
-		if _, err := io.ReadFull(f, payload); err != nil { // read the payload
+		if _, err := io.ReadFull(f, payload); err != nil {
 			return fragment{}, err
 		}
 
-		*offset += int64(fragmentHeaderSize) + int64(payloadLen) // update the offset for the next read
+		*offset += int64(fragmentHeaderSize) + int64(payloadLen)
 
 		switch fragType {
 		case FragFull, FragFirst, FragMiddle, FragLast:
@@ -528,10 +543,9 @@ func readNextFragment(f *os.File, offset *int64, fileSize int64, blockSize int) 
 			return fragment{}, fmt.Errorf("invalid fragment type: %d", fragType)
 		}
 	}
-
 }
 
-func (w *WAL) listSegments() ([]string, error) { // list all WAL segment files in the WAL directory, sort them by segment number, and return their paths
+func (w *WAL) listSegments() ([]string, error) {
 	entries, err := os.ReadDir(w.dir)
 	if err != nil {
 		return nil, err
@@ -544,12 +558,12 @@ func (w *WAL) listSegments() ([]string, error) { // list all WAL segment files i
 		}
 
 		name := entry.Name()
-		if strings.HasPrefix(name, "wal_") && strings.HasSuffix(name, ".log") { // check that the file name matches the expected pattern for WAL segments (wal_0001.log, wal_0002.log...)
+		if strings.HasPrefix(name, "wal_") && strings.HasSuffix(name, ".log") {
 			segments = append(segments, filepath.Join(w.dir, name))
 		}
 	}
 
-	sort.Slice(segments, func(i, j int) bool { // sort the segments by their segment number extracted from the file name
+	sort.Slice(segments, func(i, j int) bool {
 		ni, _ := extractSegmentNumber(segments[i])
 		nj, _ := extractSegmentNumber(segments[j])
 		return ni < nj
@@ -558,11 +572,11 @@ func (w *WAL) listSegments() ([]string, error) { // list all WAL segment files i
 	return segments, nil
 }
 
-func (w *WAL) segmentPath(segment int) string { // construct the file path for a given segment number, e.g. wal_0001.log, wal_0002.log, etc.
+func (w *WAL) segmentPath(segment int) string {
 	return filepath.Join(w.dir, fmt.Sprintf("wal_%04d.log", segment))
 }
 
-func extractSegmentNumber(path string) (int, error) { // extract the segment number from the segment file name, e.g. from wal_0001.log extract 1...
+func extractSegmentNumber(path string) (int, error) {
 	base := filepath.Base(path)
 
 	var num int

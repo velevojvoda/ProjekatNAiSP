@@ -1,10 +1,15 @@
 {
   "data_dir": "data",
   "wal_dir": "data/wal",
-  "memtable_max_entries": 1000,
   "block_size_kb": 4,
   "cache_capacity": 1000,
   "memtable_impl": "hashmap",
   "max_lsm_levels": 3,
-  "wal_segment_max_records": 3 
+  "wal_segment_max_records": 3 ,
+  "memtable_count": 2,
+  "memtable_max_entries": 2,
+  "memtable_size_type": "entries",
+  "memtable_max_size_kb": 64,
+  "max_lsm_levels": 3
+
 }
