@@ -1,16 +1,18 @@
 package engine
 
 import (
+	"ProjekatNAiSP/app/block"
 	"ProjekatNAiSP/app/cache"
 	"ProjekatNAiSP/app/config"
 	"ProjekatNAiSP/app/wal"
 )
 
 type Engine struct {
-	cfg   *config.Config
-	data  map[string][]byte
-	cache *cache.LRUCache
-	wal   *wal.WAL
+	cfg          *config.Config
+	data         map[string][]byte
+	cache        *cache.LRUCache
+	wal          *wal.WAL
+	blockManager *block.BlockManager
 }
 
 func NewEngine(cfg *config.Config) (*Engine, error) {
@@ -19,11 +21,17 @@ func NewEngine(cfg *config.Config) (*Engine, error) {
 		return nil, err
 	}
 
+	bm, err := block.NewBlockManager(cfg.BlockSizeKB, cfg.CacheCapacity)
+	if err != nil {
+		return nil, err
+	}
+
 	e := &Engine{
-		cfg:   cfg,
-		data:  make(map[string][]byte),
-		wal:   w,
-		cache: cache.NewLRUCache(cfg.CacheCapacity),
+		cfg:          cfg,
+		data:         make(map[string][]byte),
+		wal:          w,
+		cache:        cache.NewLRUCache(cfg.CacheCapacity),
+		blockManager: bm,
 	}
 
 	return e, nil
@@ -78,6 +86,18 @@ func (e *Engine) Delete(key string) error {
 	delete(e.data, key)
 	e.cache.Delete(key)
 	return nil
+}
+
+func (e *Engine) ReadBlock(path string, blockNumber int64) ([]byte, error) {
+	return e.blockManager.ReadBlock(path, blockNumber)
+}
+
+func (e *Engine) WriteBlock(path string, blockNumber int64, data []byte) error {
+	return e.blockManager.WriteBlock(path, blockNumber, data)
+}
+
+func (e *Engine) BlockManager() *block.BlockManager {
+	return e.blockManager
 }
 
 func (e *Engine) Shutdown() {
