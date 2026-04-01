@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"ProjekatNAiSP/app/block"
 	"ProjekatNAiSP/app/cache"
 	"ProjekatNAiSP/app/config"
 	"ProjekatNAiSP/app/memtable"
@@ -11,11 +12,12 @@ import (
 type FlushFunc func(records []model.Record) error
 
 type Engine struct {
-	cfg       *config.Config
-	memtables []memtable.Memtable
-	cache     *cache.LRUCache
-	wal       *wal.WAL
-	flushFn   FlushFunc
+	cfg          *config.Config
+	memtables    []memtable.Memtable
+	cache        *cache.LRUCache
+	wal          *wal.WAL
+	flushFn      FlushFunc
+	blockManager *block.BlockManager
 }
 
 func NewEngine(cfg *config.Config) (*Engine, error) {
@@ -25,6 +27,10 @@ func NewEngine(cfg *config.Config) (*Engine, error) {
 	}
 
 	activeMem := createMemtable(cfg)
+	bm, err := block.NewBlockManager(cfg.BlockSizeKB, cfg.CacheCapacity)
+	if err != nil {
+		return nil, err
+	}
 
 	e := &Engine{
 		cfg:       cfg,
@@ -34,7 +40,7 @@ func NewEngine(cfg *config.Config) (*Engine, error) {
 		flushFn: func(records []model.Record) error {
 			return nil
 		},
-	}
+		blockManager: bm}
 
 	return e, nil
 }
@@ -51,13 +57,13 @@ func (e *Engine) Recover() error {
 			if err := e.applyPut(rec.Key, rec.Value); err != nil {
 				return err
 			}
-			// e.cache.Delete(rec.Key)
+			e.cache.Delete(rec.Key)
 
 		case wal.OpDelete:
 			if err := e.applyDelete(rec.Key); err != nil {
 				return err
 			}
-			// e.cache.Delete(rec.Key)
+			e.cache.Delete(rec.Key)
 		}
 	}
 
@@ -117,6 +123,18 @@ func (e *Engine) Delete(key string) error {
 
 	e.cache.Delete(key)
 	return nil
+}
+
+func (e *Engine) ReadBlock(path string, blockNumber int64) ([]byte, error) {
+	return e.blockManager.ReadBlock(path, blockNumber)
+}
+
+func (e *Engine) WriteBlock(path string, blockNumber int64, data []byte) error {
+	return e.blockManager.WriteBlock(path, blockNumber, data)
+}
+
+func (e *Engine) BlockManager() *block.BlockManager {
+	return e.blockManager
 }
 
 func (e *Engine) Shutdown() {
