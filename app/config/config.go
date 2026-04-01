@@ -65,4 +65,5 @@ func applyDefaults(cfg *Config) {
 func createDirectories(cfg *Config) {
 	_ = os.MkdirAll(cfg.DataDir, 0o755)
 	_ = os.MkdirAll(cfg.WALDir, 0o755)
+	_ = os.MkdirAll(filepath.Join(cfg.DataDir, "sstable"), 0o755)
 }
