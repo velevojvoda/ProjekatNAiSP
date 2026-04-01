@@ -1,7 +1,7 @@
 package engine
 
 import (
-	// "ProjekatNAiSP/app/cache"
+	"ProjekatNAiSP/app/cache"
 	"ProjekatNAiSP/app/config"
 	"ProjekatNAiSP/app/memtable"
 	"ProjekatNAiSP/app/model"
@@ -13,9 +13,9 @@ type FlushFunc func(records []model.Record) error
 type Engine struct {
 	cfg       *config.Config
 	memtables []memtable.Memtable
-	// cache     *cache.LRUCache
-	wal     *wal.WAL
-	flushFn FlushFunc
+	cache     *cache.LRUCache
+	wal       *wal.WAL
+	flushFn   FlushFunc
 }
 
 func NewEngine(cfg *config.Config) (*Engine, error) {
@@ -29,8 +29,8 @@ func NewEngine(cfg *config.Config) (*Engine, error) {
 	e := &Engine{
 		cfg:       cfg,
 		memtables: []memtable.Memtable{activeMem},
-		// cache:     cache.NewLRUCache(cfg.CacheCapacity),
-		wal: w,
+		cache:     cache.NewLRUCache(cfg.CacheCapacity),
+		wal:       w,
 		flushFn: func(records []model.Record) error {
 			return nil
 		},
@@ -79,14 +79,14 @@ func (e *Engine) Put(key string, value []byte) error {
 		return err
 	}
 
-	// e.cache.Put(key, value)
+	e.cache.Put(key, value)
 	return nil
 }
 
 func (e *Engine) Get(key string) ([]byte, error) {
-	// if value, ok := e.cache.Get(key); ok {
-	// 	return value, nil
-	// }
+	if value, ok := e.cache.Get(key); ok {
+		return value, nil
+	}
 
 	for i := len(e.memtables) - 1; i >= 0; i-- {
 		record, ok := e.memtables[i].Get(key)
@@ -95,11 +95,11 @@ func (e *Engine) Get(key string) ([]byte, error) {
 		}
 
 		if record.Tombstone {
-			// e.cache.Delete(key)
+			e.cache.Delete(key)
 			return nil, nil
 		}
 
-		// e.cache.Put(key, record.Value)
+		e.cache.Put(key, record.Value)
 		return record.Value, nil
 	}
 
@@ -115,7 +115,7 @@ func (e *Engine) Delete(key string) error {
 		return err
 	}
 
-	// e.cache.Delete(key)
+	e.cache.Delete(key)
 	return nil
 }
 
