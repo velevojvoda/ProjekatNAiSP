@@ -70,11 +70,7 @@ func main() {
 			} else if value == nil {
 				fmt.Println("There is no such key")
 			} else {
-<<<<<<< HEAD
 				fmt.Println(string(value))
-=======
-				fmt.Println(string((value)))
->>>>>>> nina
 			}
 
 		case "DELETE":
