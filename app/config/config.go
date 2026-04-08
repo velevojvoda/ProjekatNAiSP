@@ -16,6 +16,9 @@ type Config struct {
 	MemtableImpl       string `json:"memtable_impl"`
 	MaxLSMLevels       int    `json:"max_lsm_levels"`
 	WALSegmentBlocks   int    `json:"wal_segment_max_records"`
+	MemtableCount      int    `json:"memtable_count"`
+	MemtableSizeType   string `json:"memtable_size_type"`
+	MemtableMaxSizeKB  int    `json:"memtable_max_size_kb"`
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -60,8 +63,21 @@ func applyDefaults(cfg *Config) {
 	if cfg.WALSegmentBlocks <= 0 {
 		cfg.WALSegmentBlocks = 4
 	}
-}
 
+	if cfg.MemtableCount <= 0 {
+		cfg.MemtableCount = 1
+	}
+	if cfg.MemtableSizeType == "" {
+		cfg.MemtableSizeType = "entries"
+	}
+	if cfg.MemtableSizeType != "entries" && cfg.MemtableSizeType != "kb" {
+		cfg.MemtableSizeType = "entries"
+	}
+	if cfg.MemtableMaxSizeKB <= 0 {
+		cfg.MemtableMaxSizeKB = 64
+	}
+
+}
 func createDirectories(cfg *Config) {
 	_ = os.MkdirAll(cfg.DataDir, 0o755)
 	_ = os.MkdirAll(cfg.WALDir, 0o755)
