@@ -86,12 +86,47 @@ func main() {
 				fmt.Println("OK")
 			}
 
+		case "LIST":
+			tables := eng.ListTables()
+			if len(tables) == 0 {
+				fmt.Println("No SSTables found")
+			} else {
+				fmt.Println("SSTables:")
+				for _, id := range tables {
+					fmt.Println(" -", id)
+				}
+			}
+
+		case "VALIDATE":
+			if len(parts) < 2 {
+				fmt.Println("Format: VALIDATE <table_id>")
+				continue
+			}
+			tableID := parts[1]
+
+			result, err := eng.ValidateTable(tableID)
+			if err != nil {
+				fmt.Println("Error:", err)
+				continue
+			}
+
+			if result.Valid {
+				fmt.Println("OK — Merkle tree is valid and root hash matches")
+			} else {
+				fmt.Println("INVALID — detected:")
+				if !result.RootMatch {
+					fmt.Println(" - Root hash does not match expected value")
+				}
+				for i, key := range result.MismatchedKeys {
+					fmt.Printf(" - Corrupted record at position %d, key: %s\n", result.MismatchedAt[i], key)
+				}
+			}
 		case "EXIT":
 			eng.Shutdown()
 			return
 
 		default:
-			fmt.Println("Unknown command. Format: PUT <key> <value> or GET <key> or DELETE <key>")
+			fmt.Println("Unknown command. Format: PUT <key> <value> or GET <key> or DELETE <key> or LIST or VALIDATE <table_id> or EXIT")
 		}
 	}
 }

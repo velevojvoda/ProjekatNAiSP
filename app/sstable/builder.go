@@ -15,15 +15,15 @@ func Build(records []model.Record, opts BuildOptions) (*Table, error) {
 	sorted := append([]model.Record(nil), records...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Key < sorted[j].Key })
 
-	indexEntries, values, err := writeDataFile(table.DataPath, sorted)
+	indexEntries, values, err := writeDataFile(table.BM, table.DataPath, table.BlockSize, sorted)
 	if err != nil {
 		return nil, err
 	}
-	allSummaryEntries, err := writeIndexFile(table.IndexPath, indexEntries)
+	allSummaryEntries, err := writeIndexFile(table.BM, table.IndexPath, table.BlockSize, indexEntries)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := writeSummaryFile(table.SummaryPath, allSummaryEntries, normalizeOptions(opts).SummaryStep); err != nil {
+	if _, err := writeSummaryFile(table.BM, table.SummaryPath, table.BlockSize, allSummaryEntries, normalizeOptions(opts).SummaryStep); err != nil {
 		return nil, err
 	}
 
@@ -33,10 +33,10 @@ func Build(records []model.Record, opts BuildOptions) (*Table, error) {
 	}
 
 	norm := normalizeOptions(opts)
-	if err := writeBloomFilter(table.FilterPath, keys, norm.BloomM, norm.BloomK); err != nil {
+	if err := writeBloomFilter(table.BM, table.FilterPath, table.BlockSize, keys, norm.BloomM, norm.BloomK); err != nil {
 		return nil, err
 	}
-	if err := writeMerkleFile(table.MerklePath, values); err != nil {
+	if err := writeMerkleFile(table.BM, table.MerklePath, table.BlockSize, values); err != nil {
 		return nil, err
 	}
 	return table, nil

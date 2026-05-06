@@ -5,27 +5,31 @@ import (
 	"path/filepath"
 	"sort"
 
+	"ProjekatNAiSP/app/block"
 	"ProjekatNAiSP/app/model"
 )
 
 type Manager struct {
 	BaseDir string
 	Options BuildOptions
+	bm      *block.BlockManager
 }
 
-func NewManager(baseDir string, opts BuildOptions) *Manager {
+func NewManager(baseDir string, opts BuildOptions, bm *block.BlockManager) *Manager {
 	opts.Dir = baseDir
-	return &Manager{BaseDir: baseDir, Options: opts}
+	opts.BM = bm
+	return &Manager{BaseDir: baseDir, Options: opts, bm: bm}
 }
 
 func (m *Manager) BuildFromRecords(records []model.Record) (*Table, error) {
 	opts := m.Options
 	opts.Dir = m.BaseDir
+	opts.BM = m.bm
 	return Build(records, opts)
 }
 
 func (m *Manager) Open(tableDir string) (*Table, error) {
-	return Open(tableDir, m.Options.BlockSize)
+	return Open(tableDir, m.Options.BlockSize, m.bm)
 }
 
 func (m *Manager) Get(table *Table, key string) (GetResult, error) {
@@ -50,7 +54,7 @@ func (m *Manager) LoadExistingTables() ([]*Table, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		table, err := Open(filepath.Join(m.BaseDir, entry.Name()), m.Options.BlockSize)
+		table, err := Open(filepath.Join(m.BaseDir, entry.Name()), m.Options.BlockSize, m.bm)
 		if err != nil {
 			return nil, err
 		}

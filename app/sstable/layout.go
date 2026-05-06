@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"ProjekatNAiSP/app/block"
 )
 
 func normalizeOptions(opts BuildOptions) BuildOptions {
@@ -41,10 +43,11 @@ func prepareTable(opts BuildOptions) (*Table, error) {
 		FilterPath:  filepath.Join(root, "filter.db"),
 		MerklePath:  filepath.Join(root, "merkle.db"),
 		BlockSize:   opts.BlockSize,
+		BM:          opts.BM,
 	}, nil
 }
 
-func Open(dir string, blockSize int) (*Table, error) {
+func Open(dir string, blockSize int, bm *block.BlockManager) (*Table, error) {
 	if blockSize <= 0 {
 		blockSize = 4096
 	}
@@ -57,5 +60,6 @@ func Open(dir string, blockSize int) (*Table, error) {
 		FilterPath:  filepath.Join(dir, "filter.db"),
 		MerklePath:  filepath.Join(dir, "merkle.db"),
 		BlockSize:   blockSize,
+		BM:          bm,
 	}, nil
 }

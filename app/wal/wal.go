@@ -574,3 +574,21 @@ func extractSegmentNumber(path string) (int, error) {
 
 	return num, nil
 }
+
+func (w *WAL) DeleteFlushedSegments() error {
+	segments, err := w.listSegments()
+	if err != nil {
+		return err
+	}
+
+	for _, segPath := range segments {
+		if segPath == w.currentPath {
+			continue
+		}
+		if err := os.Remove(segPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("Failed to delete WAL segment %s: %w", segPath, err)
+		}
+	}
+
+	return nil
+}

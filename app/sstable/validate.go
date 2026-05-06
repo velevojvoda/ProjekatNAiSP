@@ -2,11 +2,8 @@ package sstable
 
 import "bytes"
 
-// ValidateMerkle ponovo izračuna Merkle stablo iz aktuelnog data.db i poredi sa
-// onim što je snimljeno u merkle.db. Ako se neki list ne slaže, vraća tačno
-// koji ključ je oštećen.
 func (t *Table) ValidateMerkle() (ValidationResult, error) {
-	mf, err := readMerkleFile(t.MerklePath)
+	mf, err := readMerkleFile(t.BM, t.MerklePath, t.BlockSize)
 	if err != nil {
 		return ValidationResult{}, err
 	}

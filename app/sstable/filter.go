@@ -3,7 +3,8 @@ package sstable
 import (
 	"encoding/binary"
 	"hash/fnv"
-	"os"
+
+	"ProjekatNAiSP/app/block"
 )
 
 type BloomFilter struct {
@@ -43,30 +44,22 @@ func (bf *BloomFilter) hash(key string, seed uint32) uint64 {
 	return h.Sum64()
 }
 
-func writeBloomFilter(path string, keys []string, m uint64, k uint32) error {
+func writeBloomFilter(bm *block.BlockManager, path string, blockSize int, keys []string, m uint64, k uint32) error {
 	bf := newBloomFilter(m, k)
 	for _, key := range keys {
 		bf.Add(key)
 	}
 
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
 	head := make([]byte, 12)
 	binary.LittleEndian.PutUint64(head[0:8], bf.M)
 	binary.LittleEndian.PutUint32(head[8:12], bf.K)
-	if _, err := f.Write(head); err != nil {
-		return err
-	}
-	_, err = f.Write(bf.Bits)
-	return err
+
+	buf := append(head, bf.Bits...)
+	return writeAllBytes(bm, path, blockSize, buf)
 }
 
-func readBloomFilter(path string) (*BloomFilter, error) {
-	buf, err := os.ReadFile(path)
+func readBloomFilter(bm *block.BlockManager, path string, blockSize int) (*BloomFilter, error) {
+	buf, err := readAllBytes(bm, path, blockSize)
 	if err != nil {
 		return nil, err
 	}

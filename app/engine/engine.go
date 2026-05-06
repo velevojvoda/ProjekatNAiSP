@@ -17,14 +17,10 @@ import (
 	"ProjekatNAiSP/app/wal"
 )
 
-// SystemKeyPrefix identifikuje interne (rezervisane) ključeve koje korisnik ne
-// sme da vidi niti da menja preko običnog PUT/GET/DELETE-a.
 const SystemKeyPrefix = "__sys_"
 
-// Rezervisani ključ pod kojim se čuva stanje Token Bucket-a (2.2).
 const TokenBucketKey = SystemKeyPrefix + "token_bucket__"
 
-// Greške koje engine vraća korisniku.
 var (
 	ErrReservedKey       = errors.New("reserved key — not accessible to user")
 	ErrRateLimitExceeded = errors.New("rate limit exceeded")
@@ -60,7 +56,7 @@ func NewEngine(cfg *config.Config) (*Engine, error) {
 	mgr := sstable.NewManager(filepath.Join(cfg.DataDir, "sstable"), sstable.BuildOptions{
 		BlockSize:   cfg.BlockSizeKB * 1024,
 		SummaryStep: cfg.SummaryStep,
-	})
+	}, bm)
 
 	tables, err := mgr.LoadExistingTables()
 	if err != nil {
@@ -118,8 +114,6 @@ func (e *Engine) Recover() error {
 		}
 	}
 
-	// Pošto je sad sve iz WAL-a primenjeno, učitaj poslednje stanje token
-	// bucket-a iz storage-a (ako postoji).
 	if data, err := e.internalGet(TokenBucketKey); err == nil && data != nil {
 		_ = e.tokenBucket.Unmarshal(data)
 	}
@@ -319,6 +313,10 @@ func (e *Engine) flushIfNeeded() error {
 	records := e.collectFlushRecords()
 
 	if err := e.flushFn(records); err != nil {
+		return err
+	}
+
+	if err := e.wal.DeleteFlushedSegments(); err != nil {
 		return err
 	}
 

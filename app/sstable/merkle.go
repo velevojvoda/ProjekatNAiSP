@@ -4,15 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"io"
-	"os"
+
+	"ProjekatNAiSP/app/block"
 )
 
-// merkleFile je ono što fizički čuvamo u merkle.db.
-// Format na disku (binarno, bez JSON-a — u skladu sa pravilima polaganja):
-//
-//	[RootLen: 4B][Root bytes]
-//	[NumLeaves: 4B]
-//	za svaki list: [LeafLen: 4B][Leaf bytes]
 type merkleFile struct {
 	Root   []byte
 	Leaves [][]byte
@@ -57,73 +52,71 @@ func buildMerkleRootFromLeaves(leaves [][]byte) []byte {
 	return level[0]
 }
 
-func writeMerkleFile(path string, values [][]byte) error {
+func writeMerkleFile(bm *block.BlockManager, path string, blockSize int, values [][]byte) error {
 	leaves := buildMerkleLeaves(values)
 	root := buildMerkleRootFromLeaves(leaves)
 
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
+	var buf []byte
 
 	// header: [RootLen][Root][NumLeaves]
 	header := make([]byte, 4+len(root)+4)
 	binary.LittleEndian.PutUint32(header[0:4], uint32(len(root)))
 	copy(header[4:4+len(root)], root)
 	binary.LittleEndian.PutUint32(header[4+len(root):], uint32(len(leaves)))
-	if _, err := f.Write(header); err != nil {
-		return err
+	buf = append(buf, header...)
+
+	for _, leaf := range leaves {
+		lb := make([]byte, 4+len(leaf))
+		binary.LittleEndian.PutUint32(lb[0:4], uint32(len(leaf)))
+		copy(lb[4:], leaf)
+		buf = append(buf, lb...)
 	}
 
-	// listovi, jedan po jedan
-	for _, leaf := range leaves {
-		buf := make([]byte, 4+len(leaf))
-		binary.LittleEndian.PutUint32(buf[0:4], uint32(len(leaf)))
-		copy(buf[4:], leaf)
-		if _, err := f.Write(buf); err != nil {
-			return err
-		}
-	}
-	return nil
+	return writeAllBytes(bm, path, blockSize, buf)
 }
 
-func readMerkleFile(path string) (merkleFile, error) {
+func readMerkleFile(bm *block.BlockManager, path string, blockSize int) (merkleFile, error) {
 	var mf merkleFile
+	var pos int64
 
-	f, err := os.Open(path)
+	lenBuf, err := readBytesAt(bm, path, blockSize, pos, 4)
 	if err != nil {
 		return mf, err
 	}
-	defer f.Close()
+	pos += 4
+	rootLen := int(binary.LittleEndian.Uint32(lenBuf))
 
-	var lenBuf [4]byte
-
-	if _, err := io.ReadFull(f, lenBuf[:]); err != nil {
+	root, err := readBytesAt(bm, path, blockSize, pos, rootLen)
+	if err != nil {
 		return mf, err
 	}
-	rootLen := binary.LittleEndian.Uint32(lenBuf[:])
-	root := make([]byte, rootLen)
-	if _, err := io.ReadFull(f, root); err != nil {
-		return mf, err
-	}
+	pos += int64(rootLen)
 	mf.Root = root
 
-	if _, err := io.ReadFull(f, lenBuf[:]); err != nil {
+	lenBuf, err = readBytesAt(bm, path, blockSize, pos, 4)
+	if err != nil {
 		return mf, err
 	}
-	numLeaves := binary.LittleEndian.Uint32(lenBuf[:])
+	pos += 4
+	numLeaves := int(binary.LittleEndian.Uint32(lenBuf))
 
 	mf.Leaves = make([][]byte, 0, numLeaves)
-	for i := uint32(0); i < numLeaves; i++ {
-		if _, err := io.ReadFull(f, lenBuf[:]); err != nil {
+	for i := 0; i < numLeaves; i++ {
+		lb, err := readBytesAt(bm, path, blockSize, pos, 4)
+		if err != nil {
 			return mf, err
 		}
-		leafLen := binary.LittleEndian.Uint32(lenBuf[:])
-		leaf := make([]byte, leafLen)
-		if _, err := io.ReadFull(f, leaf); err != nil {
+		pos += 4
+		leafLen := int(binary.LittleEndian.Uint32(lb))
+
+		leaf, err := readBytesAt(bm, path, blockSize, pos, leafLen)
+		if err != nil {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
 			return mf, err
 		}
+		pos += int64(leafLen)
 		mf.Leaves = append(mf.Leaves, leaf)
 	}
 

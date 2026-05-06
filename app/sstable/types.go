@@ -1,6 +1,9 @@
 package sstable
 
-import "ProjekatNAiSP/app/model"
+import (
+	"ProjekatNAiSP/app/block"
+	"ProjekatNAiSP/app/model"
+)
 
 type BuildOptions struct {
 	Dir         string
@@ -9,6 +12,7 @@ type BuildOptions struct {
 	BloomM      uint64
 	BloomK      uint32
 	TableID     string
+	BM          *block.BlockManager
 }
 
 type Table struct {
@@ -20,6 +24,7 @@ type Table struct {
 	FilterPath  string
 	MerklePath  string
 	BlockSize   int
+	BM          *block.BlockManager
 }
 
 type IndexEntry struct {
