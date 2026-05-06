@@ -2,14 +2,20 @@ package sstable
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
+	"encoding/binary"
+	"io"
 	"os"
 )
 
+// merkleFile je ono što fizički čuvamo u merkle.db.
+// Format na disku (binarno, bez JSON-a — u skladu sa pravilima polaganja):
+//
+//	[RootLen: 4B][Root bytes]
+//	[NumLeaves: 4B]
+//	za svaki list: [LeafLen: 4B][Leaf bytes]
 type merkleFile struct {
-	Root   string   `json:"root"`
-	Leaves []string `json:"leaves"`
+	Root   []byte
+	Leaves [][]byte
 }
 
 func hashBytes(data []byte) []byte {
@@ -41,7 +47,9 @@ func buildMerkleRootFromLeaves(leaves [][]byte) []byte {
 			if i+1 < len(level) {
 				right = level[i+1]
 			}
-			combined := append(append([]byte(nil), left...), right...)
+			combined := make([]byte, 0, len(left)+len(right))
+			combined = append(combined, left...)
+			combined = append(combined, right...)
 			next = append(next, hashBytes(combined))
 		}
 		level = next
@@ -52,23 +60,72 @@ func buildMerkleRootFromLeaves(leaves [][]byte) []byte {
 func writeMerkleFile(path string, values [][]byte) error {
 	leaves := buildMerkleLeaves(values)
 	root := buildMerkleRootFromLeaves(leaves)
-	mf := merkleFile{Root: hex.EncodeToString(root), Leaves: make([]string, 0, len(leaves))}
-	for _, leaf := range leaves {
-		mf.Leaves = append(mf.Leaves, hex.EncodeToString(leaf))
-	}
-	data, err := json.MarshalIndent(mf, "", "  ")
+
+	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	defer f.Close()
+
+	// header: [RootLen][Root][NumLeaves]
+	header := make([]byte, 4+len(root)+4)
+	binary.LittleEndian.PutUint32(header[0:4], uint32(len(root)))
+	copy(header[4:4+len(root)], root)
+	binary.LittleEndian.PutUint32(header[4+len(root):], uint32(len(leaves)))
+	if _, err := f.Write(header); err != nil {
+		return err
+	}
+
+	// listovi, jedan po jedan
+	for _, leaf := range leaves {
+		buf := make([]byte, 4+len(leaf))
+		binary.LittleEndian.PutUint32(buf[0:4], uint32(len(leaf)))
+		copy(buf[4:], leaf)
+		if _, err := f.Write(buf); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func readMerkleFile(path string) (merkleFile, error) {
 	var mf merkleFile
-	data, err := os.ReadFile(path)
+
+	f, err := os.Open(path)
 	if err != nil {
 		return mf, err
 	}
-	err = json.Unmarshal(data, &mf)
-	return mf, err
+	defer f.Close()
+
+	var lenBuf [4]byte
+
+	if _, err := io.ReadFull(f, lenBuf[:]); err != nil {
+		return mf, err
+	}
+	rootLen := binary.LittleEndian.Uint32(lenBuf[:])
+	root := make([]byte, rootLen)
+	if _, err := io.ReadFull(f, root); err != nil {
+		return mf, err
+	}
+	mf.Root = root
+
+	if _, err := io.ReadFull(f, lenBuf[:]); err != nil {
+		return mf, err
+	}
+	numLeaves := binary.LittleEndian.Uint32(lenBuf[:])
+
+	mf.Leaves = make([][]byte, 0, numLeaves)
+	for i := uint32(0); i < numLeaves; i++ {
+		if _, err := io.ReadFull(f, lenBuf[:]); err != nil {
+			return mf, err
+		}
+		leafLen := binary.LittleEndian.Uint32(lenBuf[:])
+		leaf := make([]byte, leafLen)
+		if _, err := io.ReadFull(f, leaf); err != nil {
+			return mf, err
+		}
+		mf.Leaves = append(mf.Leaves, leaf)
+	}
+
+	return mf, nil
 }

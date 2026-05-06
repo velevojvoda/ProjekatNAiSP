@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"path/filepath"
 
 	"ProjekatNAiSP/app/block"
@@ -15,12 +16,12 @@ import (
 type FlushFunc func(records []model.Record) error
 
 type Engine struct {
-	cfg          *config.Config
-	memtables    []memtable.Memtable
-	cache        *cache.LRUCache
-	wal          *wal.WAL
-	flushFn      FlushFunc
-	blockManager *block.BlockManager
+	cfg            *config.Config
+	memtables      []memtable.Memtable
+	cache          *cache.LRUCache
+	wal            *wal.WAL
+	flushFn        FlushFunc
+	blockManager   *block.BlockManager
 	sstableManager *sstable.Manager
 	tables         []*sstable.Table
 }
@@ -37,9 +38,10 @@ func NewEngine(cfg *config.Config) (*Engine, error) {
 		return nil, err
 	}
 
+	// SummaryStep dolazi iz konfiguracije (1.3[DZ1]).
 	mgr := sstable.NewManager(filepath.Join(cfg.DataDir, "sstable"), sstable.BuildOptions{
 		BlockSize:   cfg.BlockSizeKB * 1024,
-		SummaryStep: 3,
+		SummaryStep: cfg.SummaryStep,
 	})
 
 	tables, err := mgr.LoadExistingTables()
@@ -48,12 +50,12 @@ func NewEngine(cfg *config.Config) (*Engine, error) {
 	}
 
 	e := &Engine{
-		cfg:       cfg,
-		memtables: []memtable.Memtable{activeMem},
-		cache:     cache.NewLRUCache(cfg.CacheCapacity),
-		wal:       w,
-		flushFn: nil,
-		blockManager: bm,
+		cfg:            cfg,
+		memtables:      []memtable.Memtable{activeMem},
+		cache:          cache.NewLRUCache(cfg.CacheCapacity),
+		wal:            w,
+		flushFn:        nil,
+		blockManager:   bm,
 		sstableManager: mgr,
 		tables:         tables,
 	}
@@ -180,6 +182,26 @@ func (e *Engine) BlockManager() *block.BlockManager {
 
 func (e *Engine) Shutdown() {
 	_ = e.wal.Close()
+}
+
+// ListTables vraća ID-eve svih SSTable koje engine trenutno drži učitane.
+// Koristi se za Merkle validaciju (1.3.5) iz korisničkog interfejsa.
+func (e *Engine) ListTables() []string {
+	out := make([]string, 0, len(e.tables))
+	for _, t := range e.tables {
+		out = append(out, t.ID)
+	}
+	return out
+}
+
+// ValidateTable pokreće Merkle validaciju nad tabelom sa zadatim ID-em (1.3.5).
+func (e *Engine) ValidateTable(id string) (sstable.ValidationResult, error) {
+	for _, t := range e.tables {
+		if t.ID == id {
+			return e.sstableManager.Validate(t)
+		}
+	}
+	return sstable.ValidationResult{}, fmt.Errorf("table %s not found", id)
 }
 
 func (e *Engine) applyPut(key string, value []byte) error {

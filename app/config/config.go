@@ -19,6 +19,7 @@ type Config struct {
 	MemtableCount      int    `json:"memtable_count"`
 	MemtableSizeType   string `json:"memtable_size_type"`
 	MemtableMaxSizeKB  int    `json:"memtable_max_size_kb"`
+	SummaryStep        int    `json:"summary_step"`
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -77,7 +78,13 @@ func applyDefaults(cfg *Config) {
 		cfg.MemtableMaxSizeKB = 64
 	}
 
+	// Stepen proređenosti Summary strukture (1.3[DZ1]).
+	// Svaki SummaryStep-ti zapis iz Index strukture beleži se u Summary.
+	if cfg.SummaryStep <= 0 {
+		cfg.SummaryStep = 5
+	}
 }
+
 func createDirectories(cfg *Config) {
 	_ = os.MkdirAll(cfg.DataDir, 0o755)
 	_ = os.MkdirAll(cfg.WALDir, 0o755)

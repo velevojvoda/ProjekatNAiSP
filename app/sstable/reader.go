@@ -7,6 +7,13 @@ import (
 	"ProjekatNAiSP/app/model"
 )
 
+// Get prati read path iz specifikacije za jednu SSTable:
+//  1. Bloom filter — ako kaže "ne postoji", izlazimo.
+//  2. Summary — proveravamo opseg [MinKey, MaxKey] i nalazimo startni offset
+//     u Index fajlu (lazy, bez učitavanja celog summary-ja).
+//  3. Index — od tog offset-a sekvencijalno čitamo ulaze dok ne nađemo ključ
+//     ili ne pređemo poziciju gde bi ključ trebalo da bude.
+//  4. Data — sa offset-a iz index-a čitamo konkretan zapis i validiramo CRC.
 func (t *Table) Get(key string) (GetResult, error) {
 	bf, err := readBloomFilter(t.FilterPath)
 	if err != nil {
@@ -16,11 +23,7 @@ func (t *Table) Get(key string) (GetResult, error) {
 		return GetResult{Found: false}, nil
 	}
 
-	header, summaryEntries, err := readSummary(t.SummaryPath)
-	if err != nil {
-		return GetResult{}, err
-	}
-	startOffset, err := findIndexStartOffset(header, summaryEntries, key)
+	startOffset, err := findIndexStartOffsetLazy(t.SummaryPath, key)
 	if err != nil {
 		if err == ErrInvalidSummaryRange || err == ErrNotFound {
 			return GetResult{Found: false}, nil
@@ -71,6 +74,8 @@ func (t *Table) Get(key string) (GetResult, error) {
 	return GetResult{Record: rec, Found: true}, nil
 }
 
+// AllRecords sekvencijalno pročita sve zapise iz data.db. Koristi se u Merkle
+// validaciji kada želimo da iznova izračunamo stablo.
 func (t *Table) AllRecords() ([]model.Record, error) {
 	out := make([]model.Record, 0)
 	err := scanDataFile(t.DataPath, func(_ int, rec model.Record, _ int64) error {

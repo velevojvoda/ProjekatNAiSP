@@ -1,7 +1,10 @@
 package sstable
 
-import "encoding/hex"
+import "bytes"
 
+// ValidateMerkle ponovo izračuna Merkle stablo iz aktuelnog data.db i poredi sa
+// onim što je snimljeno u merkle.db. Ako se neki list ne slaže, vraća tačno
+// koji ključ je oštećen.
 func (t *Table) ValidateMerkle() (ValidationResult, error) {
 	mf, err := readMerkleFile(t.MerklePath)
 	if err != nil {
@@ -24,8 +27,7 @@ func (t *Table) ValidateMerkle() (ValidationResult, error) {
 	res := ValidationResult{Valid: true, RootMatch: true}
 
 	for i, leaf := range leaves {
-		leafHex := hex.EncodeToString(leaf)
-		if i >= len(mf.Leaves) || mf.Leaves[i] != leafHex {
+		if i >= len(mf.Leaves) || !bytes.Equal(mf.Leaves[i], leaf) {
 			res.Valid = false
 			res.MismatchedAt = append(res.MismatchedAt, i)
 			if i < len(keys) {
@@ -34,8 +36,8 @@ func (t *Table) ValidateMerkle() (ValidationResult, error) {
 		}
 	}
 
-	rootHex := hex.EncodeToString(buildMerkleRootFromLeaves(leaves))
-	if rootHex != mf.Root {
+	root := buildMerkleRootFromLeaves(leaves)
+	if !bytes.Equal(root, mf.Root) {
 		res.Valid = false
 		res.RootMatch = false
 	}
