@@ -45,16 +45,17 @@ type Engine struct {
 }
 
 func NewEngine(cfg *config.Config) (*Engine, error) {
-	w, err := wal.NewWAL(cfg.WALDir, cfg.BlockSizeKB*1024, cfg.WALSegmentBlocks)
+	bm, err := block.NewBlockManager(cfg.BlockSizeKB, cfg.CacheCapacity)
+	if err != nil {
+		return nil, err
+	}
+
+	w, err := wal.NewWAL(cfg.WALDir, bm, cfg.WALSegmentBlocks)
 	if err != nil {
 		return nil, err
 	}
 
 	activeMem := createMemtable(cfg)
-	bm, err := block.NewBlockManager(cfg.BlockSizeKB, cfg.CacheCapacity)
-	if err != nil {
-		return nil, err
-	}
 
 	mgr := sstable.NewManager(filepath.Join(cfg.DataDir, "sstable"), sstable.BuildOptions{
 		BlockSize:   cfg.BlockSizeKB * 1024,
