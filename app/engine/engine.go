@@ -1,23 +1,44 @@
 package engine
 
 import (
+<<<<<<< HEAD
+=======
+	"fmt"
+	"path/filepath"
+
+>>>>>>> spaske
 	"ProjekatNAiSP/app/block"
 	"ProjekatNAiSP/app/cache"
 	"ProjekatNAiSP/app/config"
 	"ProjekatNAiSP/app/memtable"
 	"ProjekatNAiSP/app/model"
+<<<<<<< HEAD
+=======
+	"ProjekatNAiSP/app/sstable"
+>>>>>>> spaske
 	"ProjekatNAiSP/app/wal"
 )
 
 type FlushFunc func(records []model.Record) error
 
 type Engine struct {
+<<<<<<< HEAD
 	cfg          *config.Config
 	memtables    []memtable.Memtable
 	cache        *cache.LRUCache
 	wal          *wal.WAL
 	flushFn      FlushFunc
 	blockManager *block.BlockManager
+=======
+	cfg            *config.Config
+	memtables      []memtable.Memtable
+	cache          *cache.LRUCache
+	wal            *wal.WAL
+	flushFn        FlushFunc
+	blockManager   *block.BlockManager
+	sstableManager *sstable.Manager
+	tables         []*sstable.Table
+>>>>>>> spaske
 }
 
 func NewEngine(cfg *config.Config) (*Engine, error) {
@@ -30,6 +51,40 @@ func NewEngine(cfg *config.Config) (*Engine, error) {
 	bm, err := block.NewBlockManager(cfg.BlockSizeKB, cfg.CacheCapacity)
 	if err != nil {
 		return nil, err
+<<<<<<< HEAD
+=======
+	}
+
+	// SummaryStep dolazi iz konfiguracije (1.3[DZ1]).
+	mgr := sstable.NewManager(filepath.Join(cfg.DataDir, "sstable"), sstable.BuildOptions{
+		BlockSize:   cfg.BlockSizeKB * 1024,
+		SummaryStep: cfg.SummaryStep,
+	})
+
+	tables, err := mgr.LoadExistingTables()
+	if err != nil {
+		return nil, err
+	}
+
+	e := &Engine{
+		cfg:            cfg,
+		memtables:      []memtable.Memtable{activeMem},
+		cache:          cache.NewLRUCache(cfg.CacheCapacity),
+		wal:            w,
+		flushFn:        nil,
+		blockManager:   bm,
+		sstableManager: mgr,
+		tables:         tables,
+	}
+
+	e.flushFn = func(records []model.Record) error {
+		table, err := e.sstableManager.BuildFromRecords(records)
+		if err != nil {
+			return err
+		}
+		e.tables = append(e.tables, table)
+		return nil
+>>>>>>> spaske
 	}
 
 	e := &Engine{
@@ -109,6 +164,25 @@ func (e *Engine) Get(key string) ([]byte, error) {
 		return record.Value, nil
 	}
 
+<<<<<<< HEAD
+=======
+	for i := len(e.tables) - 1; i >= 0; i-- {
+		res, err := e.sstableManager.Get(e.tables[i], key)
+		if err != nil {
+			return nil, err
+		}
+		if !res.Found {
+			continue
+		}
+		if res.Record.Tombstone {
+			e.cache.Delete(key)
+			return nil, nil
+		}
+		e.cache.Put(key, res.Record.Value)
+		return append([]byte(nil), res.Record.Value...), nil
+	}
+
+>>>>>>> spaske
 	return nil, nil
 }
 
@@ -141,6 +215,29 @@ func (e *Engine) Shutdown() {
 	_ = e.wal.Close()
 }
 
+<<<<<<< HEAD
+=======
+// ListTables vraća ID-eve svih SSTable koje engine trenutno drži učitane.
+// Koristi se za Merkle validaciju (1.3.5) iz korisničkog interfejsa.
+func (e *Engine) ListTables() []string {
+	out := make([]string, 0, len(e.tables))
+	for _, t := range e.tables {
+		out = append(out, t.ID)
+	}
+	return out
+}
+
+// ValidateTable pokreće Merkle validaciju nad tabelom sa zadatim ID-em (1.3.5).
+func (e *Engine) ValidateTable(id string) (sstable.ValidationResult, error) {
+	for _, t := range e.tables {
+		if t.ID == id {
+			return e.sstableManager.Validate(t)
+		}
+	}
+	return sstable.ValidationResult{}, fmt.Errorf("table %s not found", id)
+}
+
+>>>>>>> spaske
 func (e *Engine) applyPut(key string, value []byte) error {
 	active := e.activeMemtable()
 

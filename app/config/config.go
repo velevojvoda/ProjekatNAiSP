@@ -19,6 +19,10 @@ type Config struct {
 	MemtableCount      int    `json:"memtable_count"`
 	MemtableSizeType   string `json:"memtable_size_type"`
 	MemtableMaxSizeKB  int    `json:"memtable_max_size_kb"`
+<<<<<<< HEAD
+=======
+	SummaryStep        int    `json:"summary_step"`
+>>>>>>> spaske
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -63,6 +67,29 @@ func applyDefaults(cfg *Config) {
 	if cfg.WALSegmentBlocks <= 0 {
 		cfg.WALSegmentBlocks = 4
 	}
+<<<<<<< HEAD
+=======
+
+	if cfg.MemtableCount <= 0 {
+		cfg.MemtableCount = 1
+	}
+	if cfg.MemtableSizeType == "" {
+		cfg.MemtableSizeType = "entries"
+	}
+	if cfg.MemtableSizeType != "entries" && cfg.MemtableSizeType != "kb" {
+		cfg.MemtableSizeType = "entries"
+	}
+	if cfg.MemtableMaxSizeKB <= 0 {
+		cfg.MemtableMaxSizeKB = 64
+	}
+
+	// Stepen proređenosti Summary strukture (1.3[DZ1]).
+	// Svaki SummaryStep-ti zapis iz Index strukture beleži se u Summary.
+	if cfg.SummaryStep <= 0 {
+		cfg.SummaryStep = 5
+	}
+}
+>>>>>>> spaske
 
 	if cfg.MemtableCount <= 0 {
 		cfg.MemtableCount = 1
@@ -81,4 +108,5 @@ func applyDefaults(cfg *Config) {
 func createDirectories(cfg *Config) {
 	_ = os.MkdirAll(cfg.DataDir, 0o755)
 	_ = os.MkdirAll(cfg.WALDir, 0o755)
+	_ = os.MkdirAll(filepath.Join(cfg.DataDir, "sstable"), 0o755)
 }
