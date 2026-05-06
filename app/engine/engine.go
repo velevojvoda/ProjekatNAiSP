@@ -104,13 +104,11 @@ func (e *Engine) Recover() error {
 			if err := e.applyPut(rec.Key, rec.Value); err != nil {
 				return err
 			}
-			e.cache.Delete(rec.Key)
 
 		case wal.OpDelete:
 			if err := e.applyDelete(rec.Key); err != nil {
 				return err
 			}
-			e.cache.Delete(rec.Key)
 		}
 	}
 
@@ -168,14 +166,11 @@ func (e *Engine) internalPut(key string, value []byte) error {
 	if err := e.applyPut(key, value); err != nil {
 		return err
 	}
-	e.cache.Put(key, value)
+	e.cache.Delete(key)
 	return nil
 }
 
 func (e *Engine) internalGet(key string) ([]byte, error) {
-	if value, ok := e.cache.Get(key); ok {
-		return value, nil
-	}
 
 	for i := len(e.memtables) - 1; i >= 0; i-- {
 		record, ok := e.memtables[i].Get(key)
@@ -186,8 +181,11 @@ func (e *Engine) internalGet(key string) ([]byte, error) {
 			e.cache.Delete(key)
 			return nil, nil
 		}
-		e.cache.Put(key, record.Value)
 		return record.Value, nil
+	}
+
+	if value, ok := e.cache.Get(key); ok {
+		return value, nil
 	}
 
 	for i := len(e.tables) - 1; i >= 0; i-- {
