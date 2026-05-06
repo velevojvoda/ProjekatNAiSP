@@ -12,5 +12,8 @@
   "memtable_size_type": "entries",
   "memtable_max_size_kb": 64,
 
-  "summary_step": 5
+  "summary_step": 5,
+
+  "rate_limit_tokens": 3,
+  "rate_limit_interval_ms": 60000
 }
