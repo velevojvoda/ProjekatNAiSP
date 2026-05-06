@@ -20,6 +20,10 @@ type Config struct {
 	MemtableSizeType   string `json:"memtable_size_type"`
 	MemtableMaxSizeKB  int    `json:"memtable_max_size_kb"`
 	SummaryStep        int    `json:"summary_step"`
+
+	// 2.2 Token Bucket — rate limiting
+	RateLimitTokens     int64 `json:"rate_limit_tokens"`
+	RateLimitIntervalMs int64 `json:"rate_limit_interval_ms"`
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -64,7 +68,6 @@ func applyDefaults(cfg *Config) {
 	if cfg.WALSegmentBlocks <= 0 {
 		cfg.WALSegmentBlocks = 4
 	}
-
 	if cfg.MemtableCount <= 0 {
 		cfg.MemtableCount = 1
 	}
@@ -77,27 +80,19 @@ func applyDefaults(cfg *Config) {
 	if cfg.MemtableMaxSizeKB <= 0 {
 		cfg.MemtableMaxSizeKB = 64
 	}
-
-	// Stepen proređenosti Summary strukture (1.3[DZ1]).
-	// Svaki SummaryStep-ti zapis iz Index strukture beleži se u Summary.
 	if cfg.SummaryStep <= 0 {
 		cfg.SummaryStep = 5
 	}
 
-	if cfg.MemtableCount <= 0 {
-		cfg.MemtableCount = 1
+	// Token Bucket default-i: 100 tokena, refill svake sekunde.
+	if cfg.RateLimitTokens <= 0 {
+		cfg.RateLimitTokens = 100
 	}
-	if cfg.MemtableSizeType == "" {
-		cfg.MemtableSizeType = "entries"
+	if cfg.RateLimitIntervalMs <= 0 {
+		cfg.RateLimitIntervalMs = 1000
 	}
-	if cfg.MemtableSizeType != "entries" && cfg.MemtableSizeType != "kb" {
-		cfg.MemtableSizeType = "entries"
-	}
-	if cfg.MemtableMaxSizeKB <= 0 {
-		cfg.MemtableMaxSizeKB = 64
-	}
-
 }
+
 func createDirectories(cfg *Config) {
 	_ = os.MkdirAll(cfg.DataDir, 0o755)
 	_ = os.MkdirAll(cfg.WALDir, 0o755)

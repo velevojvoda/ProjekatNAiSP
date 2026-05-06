@@ -1,15 +1,33 @@
 package engine
 
 import (
+	"errors"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"time"
+
 	"ProjekatNAiSP/app/block"
 	"ProjekatNAiSP/app/cache"
 	"ProjekatNAiSP/app/config"
 	"ProjekatNAiSP/app/memtable"
 	"ProjekatNAiSP/app/model"
+	"ProjekatNAiSP/app/ratelimit"
 	"ProjekatNAiSP/app/sstable"
 	"ProjekatNAiSP/app/wal"
-	"fmt"
-	"path/filepath"
+)
+
+// SystemKeyPrefix identifikuje interne (rezervisane) ključeve koje korisnik ne
+// sme da vidi niti da menja preko običnog PUT/GET/DELETE-a.
+const SystemKeyPrefix = "__sys_"
+
+// Rezervisani ključ pod kojim se čuva stanje Token Bucket-a (2.2).
+const TokenBucketKey = SystemKeyPrefix + "token_bucket__"
+
+// Greške koje engine vraća korisniku.
+var (
+	ErrReservedKey       = errors.New("reserved key — not accessible to user")
+	ErrRateLimitExceeded = errors.New("rate limit exceeded")
 )
 
 type FlushFunc func(records []model.Record) error
@@ -23,6 +41,7 @@ type Engine struct {
 	blockManager   *block.BlockManager
 	sstableManager *sstable.Manager
 	tables         []*sstable.Table
+	tokenBucket    *ratelimit.TokenBucket
 }
 
 func NewEngine(cfg *config.Config) (*Engine, error) {
@@ -37,7 +56,6 @@ func NewEngine(cfg *config.Config) (*Engine, error) {
 		return nil, err
 	}
 
-	// SummaryStep dolazi iz konfiguracije (1.3[DZ1]).
 	mgr := sstable.NewManager(filepath.Join(cfg.DataDir, "sstable"), sstable.BuildOptions{
 		BlockSize:   cfg.BlockSizeKB * 1024,
 		SummaryStep: cfg.SummaryStep,
@@ -48,6 +66,11 @@ func NewEngine(cfg *config.Config) (*Engine, error) {
 		return nil, err
 	}
 
+	tb := ratelimit.NewTokenBucket(
+		cfg.RateLimitTokens,
+		time.Duration(cfg.RateLimitIntervalMs)*time.Millisecond,
+	)
+
 	e := &Engine{
 		cfg:            cfg,
 		memtables:      []memtable.Memtable{activeMem},
@@ -57,6 +80,7 @@ func NewEngine(cfg *config.Config) (*Engine, error) {
 		blockManager:   bm,
 		sstableManager: mgr,
 		tables:         tables,
+		tokenBucket:    tb,
 	}
 
 	e.flushFn = func(records []model.Record) error {
@@ -93,6 +117,12 @@ func (e *Engine) Recover() error {
 		}
 	}
 
+	// Pošto je sad sve iz WAL-a primenjeno, učitaj poslednje stanje token
+	// bucket-a iz storage-a (ako postoji).
+	if data, err := e.internalGet(TokenBucketKey); err == nil && data != nil {
+		_ = e.tokenBucket.Unmarshal(data)
+	}
+
 	return nil
 }
 
@@ -102,20 +132,52 @@ func (e *Engine) SetFlushFunc(fn FlushFunc) {
 	}
 }
 
+// ===== Korisnička JAVNA API — proverava rezervisane ključeve i rate limit =====
+
 func (e *Engine) Put(key string, value []byte) error {
+	if isReservedKey(key) {
+		return ErrReservedKey
+	}
+	if !e.tokenBucket.Allow() {
+		return ErrRateLimitExceeded
+	}
+	return e.internalPut(key, value)
+}
+
+func (e *Engine) Get(key string) ([]byte, error) {
+	if isReservedKey(key) {
+		return nil, ErrReservedKey
+	}
+	if !e.tokenBucket.Allow() {
+		return nil, ErrRateLimitExceeded
+	}
+	return e.internalGet(key)
+}
+
+func (e *Engine) Delete(key string) error {
+	if isReservedKey(key) {
+		return ErrReservedKey
+	}
+	if !e.tokenBucket.Allow() {
+		return ErrRateLimitExceeded
+	}
+	return e.internalDelete(key)
+}
+
+// ===== INTERNI API — bez provera (koristi engine sam za sebe) =====
+
+func (e *Engine) internalPut(key string, value []byte) error {
 	if err := e.wal.AppendPut(key, value); err != nil {
 		return err
 	}
-
 	if err := e.applyPut(key, value); err != nil {
 		return err
 	}
-
 	e.cache.Put(key, value)
 	return nil
 }
 
-func (e *Engine) Get(key string) ([]byte, error) {
+func (e *Engine) internalGet(key string) ([]byte, error) {
 	if value, ok := e.cache.Get(key); ok {
 		return value, nil
 	}
@@ -125,12 +187,10 @@ func (e *Engine) Get(key string) ([]byte, error) {
 		if !ok {
 			continue
 		}
-
 		if record.Tombstone {
 			e.cache.Delete(key)
 			return nil, nil
 		}
-
 		e.cache.Put(key, record.Value)
 		return record.Value, nil
 	}
@@ -154,18 +214,18 @@ func (e *Engine) Get(key string) ([]byte, error) {
 	return nil, nil
 }
 
-func (e *Engine) Delete(key string) error {
+func (e *Engine) internalDelete(key string) error {
 	if err := e.wal.AppendDelete(key); err != nil {
 		return err
 	}
-
 	if err := e.applyDelete(key); err != nil {
 		return err
 	}
-
 	e.cache.Delete(key)
 	return nil
 }
+
+// ===== ostalo =====
 
 func (e *Engine) ReadBlock(path string, blockNumber int64) ([]byte, error) {
 	return e.blockManager.ReadBlock(path, blockNumber)
@@ -180,11 +240,12 @@ func (e *Engine) BlockManager() *block.BlockManager {
 }
 
 func (e *Engine) Shutdown() {
+	// Snimi trenutno stanje token bucket-a kao običan zapis u sistem.
+	_ = e.internalPut(TokenBucketKey, e.tokenBucket.Marshal())
 	_ = e.wal.Close()
 }
 
-// ListTables vraća ID-eve svih SSTable koje engine trenutno drži učitane.
-// Koristi se za Merkle validaciju (1.3.5) iz korisničkog interfejsa.
+// ListTables vraća ID-eve svih SSTable koje engine drži učitane.
 func (e *Engine) ListTables() []string {
 	out := make([]string, 0, len(e.tables))
 	for _, t := range e.tables {
@@ -193,7 +254,7 @@ func (e *Engine) ListTables() []string {
 	return out
 }
 
-// ValidateTable pokreće Merkle validaciju nad tabelom sa zadatim ID-em (1.3.5).
+// ValidateTable pokreće Merkle validaciju (1.3.5).
 func (e *Engine) ValidateTable(id string) (sstable.ValidationResult, error) {
 	for _, t := range e.tables {
 		if t.ID == id {
@@ -201,6 +262,13 @@ func (e *Engine) ValidateTable(id string) (sstable.ValidationResult, error) {
 		}
 	}
 	return sstable.ValidationResult{}, fmt.Errorf("table %s not found", id)
+}
+
+// ===== helperi =====
+
+// isReservedKey vraća true ako ključ pripada internom prostoru (rezervisani).
+func isReservedKey(key string) bool {
+	return strings.HasPrefix(key, SystemKeyPrefix)
 }
 
 func (e *Engine) applyPut(key string, value []byte) error {
@@ -261,68 +329,44 @@ func (e *Engine) allMemtablesFull() bool {
 	if len(e.memtables) < e.cfg.MemtableCount {
 		return false
 	}
-
 	for _, mt := range e.memtables {
 		if !mt.IsFull() {
 			return false
 		}
 	}
-
 	return true
 }
 
 func (e *Engine) collectFlushRecords() []model.Record {
 	latest := make(map[string]model.Record)
-
 	for i := len(e.memtables) - 1; i >= 0; i-- {
 		records := e.memtables[i].Records()
-
 		for _, record := range records {
 			if _, exists := latest[record.Key]; !exists {
 				latest[record.Key] = record
 			}
 		}
 	}
-
 	result := make([]model.Record, 0, len(latest))
 	for _, record := range latest {
 		result = append(result, record)
 	}
-
 	return result
 }
 
 func (e *Engine) resetMemtables() {
-	e.memtables = []memtable.Memtable{
-		createMemtable(e.cfg),
-	}
+	e.memtables = []memtable.Memtable{createMemtable(e.cfg)}
 }
 
 func createMemtable(cfg *config.Config) memtable.Memtable {
 	switch cfg.MemtableImpl {
 	case "hashmap":
-		return memtable.NewHashMapMemtable(
-			cfg.MemtableMaxEntries,
-			cfg.MemtableMaxSizeKB,
-			cfg.MemtableSizeType,
-		)
+		return memtable.NewHashMapMemtable(cfg.MemtableMaxEntries, cfg.MemtableMaxSizeKB, cfg.MemtableSizeType)
 	case "skiplist":
-		return memtable.NewSkipListMemtable(
-			cfg.MemtableMaxEntries,
-			cfg.MemtableMaxSizeKB,
-			cfg.MemtableSizeType,
-		)
+		return memtable.NewSkipListMemtable(cfg.MemtableMaxEntries, cfg.MemtableMaxSizeKB, cfg.MemtableSizeType)
 	case "btree":
-		return memtable.NewBTreeMemtable(
-			cfg.MemtableMaxEntries,
-			cfg.MemtableMaxSizeKB,
-			cfg.MemtableSizeType,
-		)
+		return memtable.NewBTreeMemtable(cfg.MemtableMaxEntries, cfg.MemtableMaxSizeKB, cfg.MemtableSizeType)
 	default:
-		return memtable.NewHashMapMemtable(
-			cfg.MemtableMaxEntries,
-			cfg.MemtableMaxSizeKB,
-			cfg.MemtableSizeType,
-		)
+		return memtable.NewHashMapMemtable(cfg.MemtableMaxEntries, cfg.MemtableMaxSizeKB, cfg.MemtableSizeType)
 	}
 }
