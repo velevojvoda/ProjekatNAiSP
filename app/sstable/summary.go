@@ -89,6 +89,9 @@ func findIndexStartOffsetLazy(bm *block.BlockManager, path string, blockSize int
 		pos += 12
 
 		keyLen := int(binary.LittleEndian.Uint32(eh[0:4]))
+		if keyLen == 0 {
+			break
+		}
 		indexOffset := binary.LittleEndian.Uint64(eh[4:12])
 
 		kb, err := readBytesAt(bm, path, blockSize, pos, keyLen)
