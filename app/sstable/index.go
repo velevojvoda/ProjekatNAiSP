@@ -37,6 +37,9 @@ func readIndexEntryAt(bm *block.BlockManager, path string, blockSize int, offset
 	}
 
 	keyLen := binary.LittleEndian.Uint32(header[0:4])
+	if keyLen == 0 {
+		return IndexEntry{}, 0, io.EOF
+	}
 	dataOffset := binary.LittleEndian.Uint64(header[4:12])
 
 	keyBytes, err := readBytesAt(bm, path, blockSize, offset+12, int(keyLen))
