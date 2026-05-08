@@ -1,5 +1,38 @@
 package wal
 
+/*
+Block and segment structure:
+	Segments are files named wal_0001.log, wal_0002.log, etc.
+	Each segment contains a fixed number of blocks (configurable).
+	Each block is a fixed size (matching the BlockManager's block size).
+
+Main functionality:
+	NewWAL: Initializes the WAL, creating the directory if it doesn't exist, and determining where to append new records based on existing segments.
+	AppendPut: Calls buildPutRecord to create a byte representation of the put record, then appends it as a logical record using appendLogicalRecord.
+	AppendDelete: Similar to AppendPut, but for delete records.
+	ReadAllRecords: Lists all segments, reads each block, and parses fragments to reconstruct logical records. Handles fragmentation across blocks and validates CRCs.
+	DeleteFlushedSegments: Lists all segments and deletes those that are not currently being written to (i.e., not the current segment).
+
+Interal logic:
+	initializeLastSegment: On startup, determines the last segment and block to append to, ensuring that new records are appended correctly without overwriting existing data.
+	appendLogicalRecord: Handles fragmentation of logical records into fragments that fit within blocks, writing them with appropriate headers and CRCs.
+	writeFragment: Writes a single fragment to the current block, ensuring it does not exceed block boundaries.
+	advanceToNextBlock: Moves to the next block within the current segment, or rotates to a new segment if the current one is full.
+	rotateToNewSegment: Starts a new segment file when the current segment reaches its block limit.
+
+Reading logic:
+	parseFragmentsInBlock: Reads fragments from a block, reconstructing logical records based on fragment types (full, first, middle, last) and validating CRCs.
+	parseLogicalRecord: Parses a complete logical record from its byte representation, validating the CRC and extracting the operation, key, and value.
+	findEndOffsetInBlock: Scans through a block to find the offset where the next logical record can be appended, based on existing fragments.
+
+Helper functions:
+	listSegments: Lists all WAL segment files in the directory, sorted by segment number.
+	segmentPath: Constructs the file path for a given segment number.
+	extractSegmentNumber: Extracts the segment number from a segment file name.
+	zeroCurrentBlock: Fills the current block buffer with zeros, used when starting a new block or segment.
+
+*/
+
 import (
 	"bytes"
 	"encoding/binary"
@@ -19,6 +52,7 @@ const (
 	OpDelete byte = 2
 )
 
+// Fragment types for logical record fragmentation across blocks
 const (
 	FragFull   byte = 1
 	FragFirst  byte = 2
@@ -323,6 +357,7 @@ func (w *WAL) initializeLastSegment() error {
 		return err
 	}
 
+	// If no segments exist, start with segment 1
 	if len(segments) == 0 {
 		w.currentSegment = 1
 		w.currentPath = w.segmentPath(w.currentSegment)
@@ -331,18 +366,21 @@ func (w *WAL) initializeLastSegment() error {
 		return nil
 	}
 
+	// Start with the last segment and determine where to append next
 	lastPath := segments[len(segments)-1]
 	lastSegmentNumber, err := extractSegmentNumber(lastPath)
 	if err != nil {
 		return err
 	}
 
+	// Check the size of the last segment to determine if we can append there or need a new segment
 	stat, err := os.Stat(lastPath)
 	if err != nil {
 		return err
 	}
 	size := stat.Size()
 
+	// If the last segment is empty, we can start there
 	if size == 0 {
 		w.currentSegment = lastSegmentNumber
 		w.currentPath = lastPath
@@ -351,6 +389,7 @@ func (w *WAL) initializeLastSegment() error {
 		return nil
 	}
 
+	// If the last segment has data, we need to find the end of the last logical record
 	if size%int64(w.blockSize) != 0 {
 		return fmt.Errorf(
 			"segment %s size %d is not a multiple of block size %d "+
@@ -359,6 +398,7 @@ func (w *WAL) initializeLastSegment() error {
 		)
 	}
 
+	// Calculate how many blocks are in the last segment
 	numBlocks := size / int64(w.blockSize)
 	if numBlocks > int64(w.blocksPerSegment) {
 		return fmt.Errorf(
@@ -367,6 +407,7 @@ func (w *WAL) initializeLastSegment() error {
 		)
 	}
 
+	// If the last segment is full, we need to start a new segment
 	if numBlocks == int64(w.blocksPerSegment) {
 		w.currentSegment = lastSegmentNumber + 1
 		w.currentPath = w.segmentPath(w.currentSegment)
@@ -375,6 +416,7 @@ func (w *WAL) initializeLastSegment() error {
 		return nil
 	}
 
+	// Otherwise, we can start appending to the last segment, but we need to find the end of the last logical record
 	w.currentSegment = lastSegmentNumber
 	w.currentPath = lastPath
 	w.currentBlockNumber = numBlocks - 1
@@ -400,6 +442,7 @@ func (w *WAL) initializeLastSegment() error {
 	return nil
 }
 
+// Scans through the block data to find the offset where the next logical record can be appended.
 func findEndOffsetInBlock(blockData []byte, blockSize int) (int, error) {
 	offset := 0
 	for offset < blockSize {
@@ -559,6 +602,7 @@ func (w *WAL) listSegments() ([]string, error) {
 	return segments, nil
 }
 
+// Helper function to get path for a given segment number
 func (w *WAL) segmentPath(segment int) string {
 	return filepath.Join(w.dir, fmt.Sprintf("wal_%04d.log", segment))
 }

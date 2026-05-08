@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-
 type TokenBucket struct {
 	capacity       int64
 	tokens         int64
@@ -31,7 +30,6 @@ func NewTokenBucket(capacity int64, refillInterval time.Duration) *TokenBucket {
 	}
 }
 
-
 func (tb *TokenBucket) Allow() bool {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
@@ -43,7 +41,6 @@ func (tb *TokenBucket) Allow() bool {
 	}
 	return false
 }
-
 
 func (tb *TokenBucket) refill() {
 	now := time.Now()
@@ -60,7 +57,7 @@ func (tb *TokenBucket) refill() {
 	tb.lastRefill = tb.lastRefill.Add(time.Duration(intervals) * tb.refillInterval)
 }
 
-
+// [Capacity:8B][Tokens:8B][RefillIntervalNs:8B][LastRefillUnixNano:8B]
 func (tb *TokenBucket) Marshal() []byte {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
@@ -73,7 +70,6 @@ func (tb *TokenBucket) Marshal() []byte {
 	return buf
 }
 
-
 func (tb *TokenBucket) Unmarshal(data []byte) error {
 	if len(data) < 32 {
 		return fmt.Errorf("token bucket: invalid data length %d (expected >=32)", len(data))
@@ -81,7 +77,6 @@ func (tb *TokenBucket) Unmarshal(data []byte) error {
 
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
-
 
 	tb.tokens = int64(binary.LittleEndian.Uint64(data[8:16]))
 	tb.lastRefill = time.Unix(0, int64(binary.LittleEndian.Uint64(data[24:32])))
