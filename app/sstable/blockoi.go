@@ -8,9 +8,7 @@ import (
 	"ProjekatNAiSP/app/block"
 )
 
-// readBytesAt čita tačno n bajtova počevši od byte-offseta 'offset' u fajlu,
-// rutiranjem kroz BlockManager. Vraća io.EOF ako nema više podataka na toj
-// poziciji, io.ErrUnexpectedEOF ako je zapis krnji.
+
 func readBytesAt(bm *block.BlockManager, path string, blockSize int, offset int64, n int) ([]byte, error) {
 	result := make([]byte, 0, n)
 	for len(result) < n {
@@ -37,8 +35,7 @@ func readBytesAt(bm *block.BlockManager, path string, blockSize int, offset int6
 	return result, nil
 }
 
-// writeAllBytes piše sve bajtove iz 'data' u fajl blok-po-blok kroz BlockManager.
-// Poslednji blok se dopunjuje nulama do pune veličine bloka.
+
 func writeAllBytes(bm *block.BlockManager, path string, blockSize int, data []byte) error {
 	if len(data) == 0 {
 		// Zapiši prazan blok da fajl postoji na disku
@@ -66,8 +63,6 @@ func writeAllBytes(bm *block.BlockManager, path string, blockSize int, data []by
 	return nil
 }
 
-// readAllBytes čita sav sadržaj fajla blok-po-blok kroz BlockManager.
-// Koristi os.Stat samo za dužinu (ne čita sadržaj direktno).
 func readAllBytes(bm *block.BlockManager, path string, blockSize int) ([]byte, error) {
 	info, err := os.Stat(path)
 	if err != nil {
