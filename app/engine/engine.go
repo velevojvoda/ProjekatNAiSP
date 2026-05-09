@@ -319,6 +319,11 @@ func (e *Engine) flushIfNeeded() error {
 	}
 
 	e.resetMemtables()
+
+	if err := e.wal.DeleteFlushedSegments(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
