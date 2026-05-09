@@ -8,22 +8,20 @@ import (
 )
 
 type Config struct {
-	DataDir            string `json:"data_dir"`
-	WALDir             string `json:"wal_dir"`
-	MemtableMaxEntries int    `json:"memtable_max_entries"`
-	BlockSizeKB        int    `json:"block_size_kb"`
-	CacheCapacity      int    `json:"cache_capacity"`
-	MemtableImpl       string `json:"memtable_impl"`
-	MaxLSMLevels       int    `json:"max_lsm_levels"`
-	WALSegmentBlocks   int    `json:"wal_segment_max_records"`
-	MemtableCount      int    `json:"memtable_count"`
-	MemtableSizeType   string `json:"memtable_size_type"`
-	MemtableMaxSizeKB  int    `json:"memtable_max_size_kb"`
-	SummaryStep        int    `json:"summary_step"`
-
-	// 2.2 Token Bucket — rate limiting
-	RateLimitTokens     int64 `json:"rate_limit_tokens"`
-	RateLimitIntervalMs int64 `json:"rate_limit_interval_ms"`
+	DataDir             string `json:"data_dir"`
+	WALDir              string `json:"wal_dir"`
+	MemtableMaxEntries  int    `json:"memtable_max_entries"`
+	BlockSizeKB         int    `json:"block_size_kb"`
+	CacheCapacity       int    `json:"cache_capacity"`
+	MemtableImpl        string `json:"memtable_impl"`
+	MaxLSMLevels        int    `json:"max_lsm_levels"`
+	WALSegmentBlocks    int    `json:"wal_segment_max_records"`
+	MemtableCount       int    `json:"memtable_count"`
+	MemtableSizeType    string `json:"memtable_size_type"`
+	MemtableMaxSizeKB   int    `json:"memtable_max_size_kb"`
+	SummaryStep         int    `json:"summary_step"`
+	RateLimitTokens     int64  `json:"rate_limit_tokens"`
+	RateLimitIntervalMs int64  `json:"rate_limit_interval_ms"`
 }
 
 func LoadConfig(path string) (*Config, error) {
